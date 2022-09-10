@@ -1,0 +1,13 @@
+# Python compilation products
+*.pyc
+*.egg*
+.ipynb_checkpoints
+
+# Figures
+*.pdf
+*.png
+
+
+# Editor filesx
+*#
+*~
