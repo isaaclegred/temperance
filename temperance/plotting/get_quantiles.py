@@ -42,7 +42,12 @@ import numpy as np
 
 from argparse import ArgumentParser
 
+
+
 ### non-standard libraries
+from temperance.core import result
+from  temperance.core.result import EoSPosterior
+
 from universality.utils import (utils, io)
 from universality.properties import samples
 from universality import plot
@@ -56,16 +61,13 @@ DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
                                            "rho",
                                            "start_baryon_density", "end_baryon_density")}
 
-def get_quantiles(path_to_samples, outdir, variables=("baryon_density", "pressurec2"),
+def get_quantiles(eos_posterior, weight_columns, outdir, variables=("baryon_density", "pressurec2"),
                   x_points=np.linspace(2.8e13, 2.8e15, 100),
                   eos_data=DEFUALT_EOS_DATA, selection_rule="random"):
     
     
 
-
 if __name__ == "__main__":
-    samples.process2quantiles(
-
 
 
 process2quantiles \
