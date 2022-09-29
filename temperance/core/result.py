@@ -109,16 +109,34 @@ class InferenceResult:
         neff = stats.neff(np.exp(np.array(eos_data)))
         return lmw, lmw2, count, neff
     
-    def sample(self, column, size=1, posterior=None):
+    def sample(self, column=None, size=1, posterior=None, weight_columns=None,
+               **kwargs):
         """
-        Sample from the posterior induced by the logweights on 
-        the samples
+        Sample from the posterior, either a known posterior
+        on the eos's or a set of weight_columns can be used
+        to induce weights for sampling
+        kwargs are passed to pandas.DataFrame.sample
         """
-        posterior = self.posterior if posterior is None else posterior
-        return np.random.choice(self.samples[column], size=size, p = posterior)
+        if posterior is not None and weight_columns is not None:
+            raise ValueError("only one of posterior and weight_columns can"
+                             "be specified")
+        # get the weights from the weight_columns
+        posterior = (self.get_weight(weight_columns)
+                     if weight_columns is not None
+                     else posterior)
+        if column is not None:
+            return np.array(self.samples.sample(n=size,
+                                                weights=posterior,
+                                                **kwargs)[column]) 
+        return self.samples.sample(n=size,
+                                   Weights=posterior,
+                                   **kwargs)
     def corner(self, columns, num_samples_to_use=1000, *args, **kwargs):
-        reduced_samples = self.samples.sample(n=num_samples_to_use, weights =self.posterior)
-        sns.pairplot(self.samples, vars=columns, corner=True,  kind="kde", plot_kws={"weights":self.posterior, **kwargs}, diag_kws={"weights":self.posterior, **kwargs})
+        reduced_samples = self.samples.sample(n=num_samples_to_use,
+                                              weights =self.posterior)
+        sns.pairplot(self.samples, vars=columns, corner=True,  kind="kde",
+                     plot_kws={"weights":self.posterior, **kwargs},
+                     diag_kws={"weights":self.posterior, **kwargs})
     def get_auxillary_weighted_posterior(self, auxillary_likelihoods):
         for likelihood_name in auxillary_likelihoods:
             likelihood = self.auxillary_likelihood[likelihood_name]
