@@ -52,6 +52,8 @@ from universality.utils import (utils, io)
 from universality.properties import samples
 from universality import plot
 
+
+
 DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
                     "eos_column",
                     "eos_per_dir":1000,
@@ -63,8 +65,24 @@ DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
 
 def get_quantiles(eos_posterior, weight_columns, outdir, variables=("baryon_density", "pressurec2"),
                   x_points=np.linspace(2.8e13, 2.8e15, 100),
-                  eos_data=DEFUALT_EOS_DATA, selection_rule="random"):
+                  eos_data=DEFUALT_EOS_DATA, selection_rule="random",
+                  varaible_multipliers={"baryon_density" : 1, "pressurec2" : 1}):
     
+    samples.process2quantiles(data,
+                            tmp,
+                              mod,
+                              xcolumn,
+                              ycolumn,
+                              x_test,
+                              quantiles,
+                              quantile_type='sym',
+                              x_multiplier=1.,
+                              y_multiplier=1.,
+                              weights=None,
+                              selection_rule=DEFAULT_SELECTION_RULE,
+                              branches_mapping=None,
+                              default_y_value=None,
+                              verbose=False,)
     
 
 if __name__ == "__main__":

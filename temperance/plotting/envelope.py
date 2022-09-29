@@ -6,7 +6,7 @@ matplotlib.use("agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-impoty os
+import os
 
 
 
@@ -27,15 +27,13 @@ c_cgs=lal.C_SI*100
 rhonuc=2.8e14
 
 
-def get_defaults(matplotlib):
-    print("Warning! This function modifies matplotlib params upon import, \
-    this is probably fine (tbh the normal matplotlib state is also arbitary and worse) \
-    but if something goes wonky it's probably this.")
+def get_defaults(matplotlib, fontsize=18):
+    print("Warning! Modifying matplotlib defaults.")
     matplotlib.rcParams['figure.figsize'] = (9.7082039325, 6.0)
-    matplotlib.rcParams['xtick.labelsize'] = 27.0
-    matplotlib.rcParams['ytick.labelsize'] = 27.0
-    matplotlib.rcParams['axes.labelsize'] = 27.0
-    matplotlib.rcParams['legend.fontsize'] = 22.0
+    matplotlib.rcParams['xtick.labelsize'] = fontsize
+    matplotlib.rcParams['ytick.labelsize'] = fontsize
+    matplotlib.rcParams['axes.labelsize'] = fontsize
+    matplotlib.rcParams['legend.fontsize'] = fontsize
     matplotlib.rcParams['font.family']= 'Times New Roman'
     matplotlib.rcParams['font.sans-serif']= ['Bitstream Vera Sans']
     matplotlib.rcParams['text.usetex']= True
@@ -44,7 +42,7 @@ def get_defaults(matplotlib):
     matplotlib.rcParams['ytick.right'] = True
 
 
-def write_quantiles_dag(tags=[], eos_dir_tags, eos_cs2c2_dir_tags, eos_per_dir,  which_quantiles="", outtag=None, logweight_columns=["logweight_total"], dont_make_prior=False, rundir="run"):
+def write_quantiles_dag(tags, eos_dir_tags, eos_cs2c2_dir_tags, eos_per_dir,  which_quantiles="", outtag=None, logweight_columns=["logweight_total"], dont_make_prior=False, rundir="run"):
     """
     Write a dag to parallelize the process of dag creation
     """
@@ -54,7 +52,7 @@ def get_file_type(variables, explicit_file_type=None):
     ''' 
     Find the file type based on the variables requested
     If you ask for inconsistent variables (i.e. M and baryon_density), the code will give you 
-    the one that you ask for first, and it will only fail when  "draw_curve" tries to find data 
+    the one that you ask for first, and it will only  fail when  "draw_curve" tries to find data 
     in the file that doesn't exist
     '''
     if explicit_file_type is not None:
@@ -64,7 +62,7 @@ def get_file_type(variables, explicit_file_type=None):
     elif ("baryon_density"  in variables or "pressurec2" in variables or "energy_densityc2" in variables or "cs2c2" in variables):
         return "eos-draw-"
     else :
-        raise("unrecognized variables", variables)
+        raise("unrecognized variables", variable)
 def get_logweights(weight_file, eos_column="eos", logweight_column="logweight_total"):
     '''
     Get a Dictionary of logweights from a file with eoss and logweights
@@ -72,7 +70,16 @@ def get_logweights(weight_file, eos_column="eos", logweight_column="logweight_to
     eos = np.array(pd.read_csv(weight_file)["eos"])
     logweight = np.array(pd.read_csv(weight_file)[logweight_column])
     return {eos[i] : logweight[i] for i in range(len(eos))}
-        
+
+def overlay_eos(eos_file, variables=("M", "R"), label=None, ax=None, preprocessing=None):
+    if ax is None:
+        ax = plt.gca()
+    eos = pd.read_csv(eos_file)
+    data = eos[variables[0]], eos[variables[1]]
+    if preprocessing is not None:
+        data = preprocessing(data)
+    ax.plot(*data, label=label)
+
 # Data will come out in the order the variables are put in, if using explicit_file_type make sure it agrees with the variables being used, otherwise 
 # the function will just find the right file to grab.  This can return arbitrary dimensional data, the more variables the more data. 
 def draw_curve(eos_dir="/home/philippe.landry/nseos/eos/gp/mrgagn/", eos_per_dir=1000,
