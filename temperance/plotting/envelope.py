@@ -2,7 +2,6 @@
 #################
 import numpy as np
 import matplotlib
-matplotlib.use("agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
@@ -34,10 +33,11 @@ def get_defaults(matplotlib, fontsize=18):
     matplotlib.rcParams['ytick.labelsize'] = fontsize
     matplotlib.rcParams['axes.labelsize'] = fontsize
     matplotlib.rcParams['legend.fontsize'] = fontsize
-    matplotlib.rcParams['font.family']= 'Times New Roman'
+    plt.rcParams['font.family'] = 'DeJavu Serif'
+    plt.rcParams['font.serif'] = ['Times New Roman']
     matplotlib.rcParams['font.sans-serif']= ['Bitstream Vera Sans']
     matplotlib.rcParams['text.usetex']= True
-    matplotlib.rcParams['mathtext.fontset']= 'stixsans'
+    matplotlib.rcParams['mathtext.fontset']= 'dejavuserif'
     matplotlib.rcParams['xtick.top'] = True
     matplotlib.rcParams['ytick.right'] = True
 
@@ -254,7 +254,7 @@ def plot_generic_mr_envelope(post_path, prior_path,
                              this_label='GENERIC', lower=5, median=50,
                              upper=95, no_prior=False,
                              prior_linestyle="-.", lw=2.5, prior_label=None,
-                             ax=None):
+                             ax=None,):
     if ax is not None:
         plt.sca(ax)
     if not no_prior:
@@ -317,22 +317,20 @@ def plot_envelope(post_path, prior_path,
     plt.plot(ind,dep5,c=post_color,lw=lw,label=this_label)
     plt.plot(ind, dep95,c=post_color,lw=lw) 
 
-def complete_mr_plot(ax=None):
+def complete_mr_plot(ax=None, ylim=(.8, 2.2), xlim=(8,14)):
     if ax is not None:
         plt.sca(ax)
     plt.tight_layout()
     plt.grid(alpha=0.5)
     plt.xlabel('$ R$ (km)')
     plt.ylabel('$M \, (M_{\odot})$')
-    plt.ylim(0.75,2.5)
-    plt.xlim(9,18)
+    plt.ylim(ylim)
+    plt.xlim(xlim)
 
-    plt.fill_between(np.arange(6,20,2),2.15,2.01,color='grey',alpha=0.5)
-    plt.text(15.9,2.03,'J0740+6620',color='k',fontsize=27)
 
     plt.yticks([1,1.4,1.8,2.2])
     plt.tick_params(direction='in')
-    plt.legend(frameon=True,fancybox=True,framealpha=0.7,loc="lower right",fontsize=20)
+    plt.legend(frameon=True,fancybox=True,framealpha=0.7,loc="lower left",fontsize=20)
 
 
 def plot_generic_cs2_envelope(post_path, prior_path, post_color="magenta", prior_color="red", this_label='GENERIC', lower=5, center=50, upper=95, divide_by_rho_nuc=False, no_prior=False, prior_linestyle="-.", lw=2.5, prior_label=None, ax=None):

@@ -74,12 +74,39 @@ class PlottableColumn:
     true_value : float = None
     log_column : bool = False
     column_multiplier : float = None
-
-    
-    
+    def get_plottable_data(self, samples):
+        column_data  = np.array(samples[self.name])
+        if self.log_column:
+            column_data = np.log(column_data)
+        if self.column_multiplier is not None:
+            column_data*=self.column_multiplier
+        return column_data
+    def get_plottable_true_value(self):
+        true_value = self.true_value
+        if self.log_column:
+            true_value = np.log(true_value)
+        if self.column_multiplier is not None:
+            true_value *= self.column_multiplier
+        return true_value
+            
+            
 
 @dataclass
 class PlottableSamples:
+    """
+    Arbitrary samples from some posterior distribution to be plotted
+    """
+    label: str
+    samples: pd.DataFrame
+    weight_columns_to_use: list[result.WeightColumn]
+    max_samples:int =None
+    color: str = None
+    alpha: float = None
+    linestyle: str = "-"
+    linewidth: float = 2.0
+
+@dataclass
+class PlottableEoSSamples:
     label :str
     posterior: result.EoSPosterior
     weight_columns_to_use: list[result.WeightColumn]
@@ -89,17 +116,18 @@ class PlottableSamples:
     linestyle: str = "-"
     linewidth: float = 2.0
     def guarantee_consistent_order(self):
-        self.additional_properties = pd.merge(self.posterior.samples[posterior.eos_column],
-                                              self.additional_properties,
-                                              on=self.posterior.eos_column)
-    def get_data(self, column_names):
+        self.additional_properties = pd.merge(
+            self.posterior.samples[posterior.eos_column],
+            self.additional_properties,
+            on=self.posterior.eos_column)
+    def get_data(self, plottable_columns:list[PlottableColumn]):
         eos_file_columns = [self.posterior.eos_column]
         additional_columns = [self.posterior.eos_column]
-        for column_name in column_names:
-            if column_name in self.posterior.samples.keys():
-                eos_file_columns.append(column_name)
-            elif column_name in self.additional_properties.keys():
-                additional_columns.append(column_name)
+        for column in plottable_columns:
+            if column.name in self.posterior.samples.keys():
+                eos_file_columns.append(column.name)
+            elif column.name in self.additional_properties.keys():
+                additional_columns.append(column.name)
             else:
                 raise KeyError(f"Column {column_name} not found in either the "
                                "EoS or additional_properties files")
@@ -107,10 +135,26 @@ class PlottableSamples:
         # file will not contain all of the data we need and (2)
         # all the data we need is a small subset of the total data avaiable
         # in both files
-        return pd.merge(self.posterior.samples[eos_file_columns],
-                        self.additional_properties[additional_columns],
-                        on=self.posterior.eos_column)
-            
+        joint_data = pd.merge(self.posterior.samples[eos_file_columns],
+                              self.additional_properties[additional_columns],
+                              on=self.posterior.eos_column)
+        joint_data.pop(self.posterior.eos_column)
+        for column in plottable_columns:
+            joint_data[column.name] = column.get_plottable_data(joint_data)
+        return joint_data
+    def get_prior(self, prior_prefix="prior", color=None,
+                  weight_columns_to_use=[],
+                  alpha=None, linestyle="--", linewidth=2.0):
+        return PlottableEoSSamples(
+            label=f"{prior_prefix}({self.label})",
+            posterior=self.posterior,
+            weight_columns_to_use=weight_columns_to_use,
+            additional_properties=self.additional_properties,
+            color=color,
+            alpha=alpha,
+            linestyle=linestyle,
+            linewidth=linewidth
+        )        
         
     
 
@@ -133,7 +177,18 @@ def get_property_columns(plottable_samples):
     return property_columns
 
 
-
+def corner_samples(plottable_samples, use_universality=False,
+                   columns_to_plot=None, legend=True, fig=None,
+                   *args, **kwargs):
+    """
+    Make a corner plot of certain samples from some distribution
+    """
+    column_names = [column.name for column in columns_to_plot]
+    bandwidths = [column.bandwidth for column in columns_to_plot]
+    truths = [column.true_value for column in columns_to_plot]
+    ranges = [column.plot_range for column in columns_to_plot]
+    column_labels= [column.label for column in columns_to_plot]
+    
 def corner_eos(plottable_samples,  use_universality=True,
                columns_to_plot=None, legend=True, fig=None,  *args, **kwargs):
     """
@@ -152,7 +207,7 @@ def corner_eos(plottable_samples,  use_universality=True,
 
     
     bandwidths = [column.bandwidth for column in columns_to_plot]
-    truths = [column.true_value for column in columns_to_plot]
+    truths = [[column.get_plottable_true_value()] for column in columns_to_plot]
     ranges = [column.plot_range for column in columns_to_plot]
     column_labels= [column.label for column in columns_to_plot]
 
@@ -168,10 +223,11 @@ def corner_eos(plottable_samples,  use_universality=True,
             if legend:
                 lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
                                      color=samples.color), samples.label))
-            data = np.array(samples.get_data(column_names)[column_names])
+            data = np.array(samples.get_data(columns_to_plot))
             weights_df = samples.posterior.get_total_weight(
                 samples.weight_columns_to_use)
-            weights = np.array(pd.merge(weights_df, samples.additional_properties,
+            weights = np.array(pd.merge(weights_df,
+                                        samples.additional_properties,
                                         on=samples.posterior.eos_column)["total_weight"])
             fig = uplot.kde_corner(data,
                                    bandwidths=bandwidths,
