@@ -78,10 +78,12 @@ def get_quantiles(eos_posterior,  weight_columns=None,
     # TODO This is not right, but it's fast, figure out how to correctly
     # "subtract 1" from the weight for having been sampling EoS from the
     # weights as well
+    if (eos_posterior.compute_neff(weight_columns) > max_num_samples):
+        print("warning, you might not be using enough samples to resolve the posterior")
     samples = eos_posterior.sample(size=max_num_samples,
-                                   weight_columns=weight_columns)
+                                   weight_columns=[])
     weights = np.array(result.get_total_weight(samples, weight_columns)["total_weight"])
-    truth = weights > weight_threshold
+    truth = weights > weight_threshold * max(weights)
     data = np.array(samples["eos"])
     branches_data=None if not(use_macro) else eos_data.branches_data
     template_base = (eos_data.eos_path_template
@@ -91,12 +93,12 @@ def get_quantiles(eos_posterior,  weight_columns=None,
     template = eos_data.get_path_template(base=template_base, eos_dir=eos_data.macro_dir if use_macro else eos_data.eos_dir)
     print(f"template is, {template}")
     raw_quantiles, med =  usamples.process2quantiles(
-        data=data, tmp=template,
+        data=data[truth], tmp=template,
         mod=eos_data.eos_per_dir, xcolumn=variables[0],
         ycolumn=variables[1],
         quantiles=quantiles,
         x_test=x_points,
-        weights=weights, selection_rule=selection_rule,
+        weights=weights[truth], selection_rule=selection_rule,
         branches_mapping=branches_data)
     quantiles = pd.DataFrame(
         raw_quantiles,
@@ -149,7 +151,7 @@ def get_r_of_m_quantiles(eos_posterior,  weight_columns=None,
 
 def get_lambda_of_m_quantiles(eos_posterior,  weight_columns=None,
                   variables=("M", "Lambda"),
-                        x_points=np.linspace(1.0, 2.5, 100),
+                        x_points=np.linspace(1.0, 2.2, 100),
                                **kwargs):
     """
     Default call to get m-lambda quantiles

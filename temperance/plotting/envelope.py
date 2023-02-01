@@ -6,7 +6,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import os
+from dataclasses import dataclass, field
 
+import temperance as tmpy
+import temperance.core.result as result
+from temperance.core.result import EoSPosterior
+from  temperance.sampling.eos_prior import EoSPriorSet
 
 
 
@@ -42,10 +47,7 @@ def get_defaults(matplotlib, fontsize=18):
     matplotlib.rcParams['ytick.right'] = True
 
 
-def write_quantiles_dag(tags, eos_dir_tags, eos_cs2c2_dir_tags, eos_per_dir,  which_quantiles="", outtag=None, logweight_columns=["logweight_total"], dont_make_prior=False, rundir="run"):
-    """
-    Write a dag to parallelize the process of dag creation
-    """
+
 
 
 def get_file_type(variables, explicit_file_type=None):
@@ -407,5 +409,115 @@ def complete_cs2_plot(divide_by_rho_nuc=False, log_cs2_axis=True, ax=None):
         plt.text(.3,0.37,'$c_s^2/c^2 = 1/3$',fontsize=22)
         plt.xticks([.5,1,2,3,4,5,6,7,8,9], labels =["0.5", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
 
-        
+
+
+@dataclass
+class PlottableQuantiles:
+    label : str
+    quantiles : pd.DataFrame
+    posterior : EoSPosterior
+    weight_columns : list[result.WeightColumn] = None
+    prior_set : EoSPriorSet=EoSPriorSet.get_default()
+    color : str = None
+    lw : float = 2.0
+    scale_x : float = 1.0
+    scale_y : float = 1.0
+    fill_alpha : float = 0.1
+    flip_axes : bool = False
+    plot_kwargs : dict = field(default_factory=dict)
+    def plot(self, ax, lower=5, upper=95, middle=50, plot_middle=False, plot_draws=None,
+             no_quantiles=False, **plot_kwargs):
+
+        if 'quantile' in self.quantiles.columns:
+            self.quantiles.pop('quantile')
+        if ax is None:
+            ax = plt.gca()
+        x_vals = np.array(list(map(
+            lambda column : float(column.split("=")[1][:-1]), self.quantiles.columns))) * self.scale_x
+        y_middle = self.quantiles.loc[50,:] * self.scale_y
+        y_low = self.quantiles.loc[5,:] * self.scale_y
+        y_high = self.quantiles.loc[95,:] * self.scale_y
+        if not(no_quantiles):
+            if not(self.flip_axes):
+                ax.fill_between(x_vals, y_low, y_high, color=self.color, alpha=self.fill_alpha)
+                ax.plot(x_vals,y_low,c=self.color,lw=self.lw,label=self.label,**self.plot_kwargs)
+                ax.plot(x_vals,y_high,c=self.color,lw=self.lw, **self.plot_kwargs)
+            else:
+                ax.plot(y_low, x_vals,c=self.color,lw=self.lw,label=self.label, **self.plot_kwargs)
+                ax.plot(y_high, x_vals,c=self.color,lw=self.lw, **self.plot_kwargs)
+                ax.fill_betweenx(x_vals, y_low, y_high, alpha = self.fill_alpha, color=self.color)
+        if plot_draws is not None and plot_draws != {}:
+            num_draws = plot_draws["num_draws"]
+            x_var = plot_draws["x_var"]
+            y_var = plot_draws["y_var"]
+            is_macro = plot_draws["is_macro"]
+            indices = self.posterior.sample(
+                columns=[self.posterior.eos_column],
+                size=num_draws, weight_columns=self.weight_columns)
+            print(indices)
+            for counter, draw_index in enumerate(indices[self.posterior.eos_column]):
+                if is_macro:
+                    print("is this working?")
+                    data = pd.read_csv(self.prior_set.get_macro_path(int(draw_index)))
+                    if counter == 0:
+                        
+                        plot_macro(data, columns=(x_var, y_var), color=self.color,
+                                   label = self.label, **self.plot_kwargs)
+
+                    else :
+                        plot_macro(data, columns=(x_var, y_var), color=self.color, **self.plot_kwargs)
+
+                else:
+                    data = pd.read_csv(self.prior_set.get_eos_path(int(draw_index)))
+                    if counter == 0:
+                        ax.plot(data[x_var], data[y_var], color=self.color, label = self.label, **self.plot_kwargs)
+                    else:
+                        ax.plot(data[x_var], data[y_var], color=self.color, **self.plot_kwargs)
+                print(data)
+                
+
+        return ax
+    
+def default_initialize(figsize =(9.7082039325, 6) ):
+    fig =  plt.figure(figsize=figsize)
+    ax = plt.gca()
+    return fig, ax
+
+def plot_envelope(plottable_quantiles, initialize=default_initialize, initialize_kwargs={},plot_kwargs={}, complete_plot=None, complete_kwargs={}):
+    if initialize is not None:
+        fig, ax = initialize(**initialize_kwargs)
+    for plottable_quantile in plottable_quantiles:
+        ax = plottable_quantile.plot(ax, **plot_kwargs)
+    if complete_plot is not None:
+        ax = complete_plot(**complete_kwargs)
+    return ax
+def default_complete_plot(ax, variables,names,  ranges, legend_kwargs={"framealpha":.2, "loc":"best"}):
+    if ax is None:
+        ax = plt.gca()
+    ax.set_xlabel(names[variables[0]])
+    ax.set_ylabel(names[variables[1]])
+    ax.set_xlim(*ranges[variables[0]])
+    ax.set_ylim(*ranges[variables[1]])
+    ax.legend(**legend_kwargs)
+    return ax
+
+def trim_unstable(injection_data, M_column="M"):
+    """
+    Trim the final unstable branch off of TOV data in 
+    dataframe format, 
+    """
+    last_stable = np.where(np.diff(injection_data[M_column]) > 0)[0][-1]
+    return injection_data.loc[: last_stable + 1, :] 
+
+def get_rhoc_mmax(injection_data, M_column="M", rhoc_column="rhoc"):
+    return np.array(trim_unstable(injection_data)[[M_column, rhoc_column]])[-1, :]
+def plot_macro(data, columns=("R", "M"), trim_collapse=True, mark_max_mass=True, M_column="M", **kwargs):
+    if trim_collapse:
+        trimmed_data = trim_unstable(data, M_column=M_column)
+    else:
+        trimmed_data = data
+    plt.plot(trimmed_data[columns[0]], trimmed_data[columns[1]], **kwargs)
+    if mark_max_mass:
+        plt.scatter(trimmed_data[columns[0]].tail(1).item(), trimmed_data[columns[1]].tail(1).item(),
+                    s=2, color="red")
     

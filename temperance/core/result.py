@@ -7,7 +7,7 @@ import bilby
 import seaborn as sns
 from dataclasses import dataclass
 import warnings
-
+import copy 
 
 # Utilities
 # to be factored out
@@ -43,7 +43,7 @@ def _uniform_mass_pdf(
     if no_range_check is True assume the sample is in the region of support
     """
     if (no_range_check or # do the check
-        high >= sample[mass_1_name] >= sample[mass_2_name] >= low:
+        high >= sample[mass_1_name] >= sample[mass_2_name] >= low):
         return 1/(high - low)**2 * 2
     else:
         return 0.0
@@ -262,7 +262,12 @@ class WeightColumn:
     name: str
     is_log: bool = True
     is_inverted: bool = False
-
+    def get_inverse(self):
+        """
+        Get the identical weight column, but inverted, i.e. representing the 
+        complementary weight.  
+        """
+        return WeightColumn(self.name, self.is_log, not(self.is_inverted))
 def get_weight_columns(samples, weight_columns):
     """
     return the weight columns identified in this posterior 
@@ -325,6 +330,8 @@ def get_column_logweight(samples:pd.DataFrame, weight_column:WeightColumn):
     logweights = invert_logweight(logweights) if weight_column.is_inverted else logweights
     return logweights
 
+
+
 def get_total_weight(samples:pd.DataFrame,
                      weight_columns:list[WeightColumn],index_columns=None,
                      weights_as_array=False):
@@ -338,7 +345,7 @@ def get_total_weight(samples:pd.DataFrame,
         total_logweights += get_column_logweight(samples, weight_column)
         
     if index_columns is not None:
-        weights_df = self.samples[index_columns].copy()
+        weights_df = samples[index_columns].copy()
     else:
         weights_df  = pd.DataFrame()
     if weights_as_array:
@@ -346,6 +353,25 @@ def get_total_weight(samples:pd.DataFrame,
     weights_df["total_weight"] = np.transpose(np.exp(total_logweights))
     return weights_df
 
+def get_logical_or_weight_column(samples:pd.DataFrame, weight_columns:list[WeightColumn], result_name=None, **kwargs):
+    """
+    Instead of getting the and of the weights (that is the product of the weights), get 
+    the logical or of the columns, so that if any is true, the  
+    """
+    if result_name is None:
+        result_name = "weight_{weight_column_1.name.split['weight_'][-1]}_or_{weight_column_2.name.split('weight')[-1]}"
+    for weight_column in weight_columns:
+        weight_column.is_inverted=not(weight_column.is_inverted)
+    
+    output_weights = get_total_weight(samples, weight_columns, **kwargs)
+    
+    output_weights[result_name] = 1.0 - np.array(output_weights["total_weight"]) # not eveything
+    output_weights.pop("total_weight")
+    
+    result_weight_column = WeightColumn(name=result_name, is_log=False, is_inverted=False)
+    return output_weights, result_weight_column
+        
+        
 
 
 class EoSPosterior:
@@ -479,7 +505,7 @@ class EoSPosterior:
                                    **kwargs)
 
     def condition(self, evaluated_criteria, weight_is_log = False,
-                  include_negation=False):
+                  include_negation=False, weight_key=None):
         """
         Add additional weight columns corresponding to this criteria for these EoSs,
         the criteria should have the form (criteria_name:string, 
@@ -487,7 +513,8 @@ class EoSPosterior:
         and some other column with weight
         corresponding to the criteria) 
         """
-        weight_key = [column for column in evaluated_criteria.keys() if column != self.eos_column][0]
+        if weight_key is None:
+            weight_key = [column for column in evaluated_criteria.keys() if column != self.eos_column][0]
         if not weight_is_log:
             evaluated_criteria[weight_key] = np.log(evaluated_criteria[weight_key])
             
@@ -525,6 +552,17 @@ class EoSPosterior:
         evidence = np.sum(weights * prior)
         var_evidence = np.sum(prior**2)*np.sum((squares - evidence**2) * prior)
         return evidence, var_evidence
+
+    def maximum_likelihood(self, weight_columns_to_use, argmax=False):
+        """
+        Compute the maximum likelihood of the posterior given the weight 
+        columns provided.
+        
+        If argmax is true, return the index of the maximum rather than the maximum itself.
+        """
+        max_function = np.argmax if argmax else np.max
+        return max_function(self.get_total_weight(weight_columns_to_use)["total_weight"])
+
     def compute_neff(self, weight_columns_to_use=[], threshold=0.0):
         """
         Compute the number of effective samples in the posterior using 
@@ -535,3 +573,72 @@ class EoSPosterior:
         nonnegligable = np.where(total_weight / np.sum(total_weight) > threshold)[0]
         print(total_weight[nonnegligable])
         return stats.neff(total_weight[nonnegligable])
+
+    def add_weight_column(self, weight_column, indexed_weights):
+        """
+        Modify the EoSPosterior object to add a new weight
+        Args:
+           self: EoSPosterior
+           weight_column: WeightColumn
+           indexed_weights: pf.DataFrame, or indexable with columns self.eos_column,
+           and an additional column with weight_column.name
+
+        Returns:
+        None
+
+        """
+        
+        self.samples = pd.merge(self.samples, indexed_weights, on=self.eos_column)
+        self.weight_columns_available.append(weight_column)
+
+
+    
+    def add_property(self, eos_prior_data, add_to=None, **kwargs):
+        """
+        Extract a propert for the EoS prior process which was used to generate
+        this posterior, the user has to know the details of the process as specified
+        in an eos_prior_data. If add_to is not None, use this dataframe as the 
+        destination for the collated samples.  Otherwise use the EoS posterior itself.
+        
+        **kwargs will be passed to the eos_prior_data.get_property function
+        which does all of the heavy lifting.  
+
+        Note that the destination add_to must have the same EoSs in the same order as
+        the eos posterior for this call to work, no merge is done on keys.  
+
+        Note this doesn't return the thing it's adding to,
+        (maybe that should change)
+        """
+        new_samples =  eos_prior_data.get_property(self.samples[self.eos_column], **kwargs)
+        if add_to is not None:
+            for key in new_samples.keys():
+                add_to[key] = new_samples[key]
+        else:
+            for key in new_samples.keys():
+                self.samples[key] = new_samples[key]
+                
+    def add_logical_or_weight_column(self, weight_columns, result_name=None):
+        result_weight, result_weight_column = get_logical_or_weight_column(
+            samples=self.samples, weight_columns=weight_columns, result_name=result_name,
+            index_columns=self.eos_column)
+
+        print(result_weight)
+        print(result_weight[result_name])
+        self.weight_columns_available.append(result_weight_column)
+        
+    def add_logical_or_weight_column(self, weight_columns, result_name=None):
+        if result_name is None:
+            result_name = "weight_{weight_column_1.name.split['weight_'][-1]}_or_{weight_column_2.name.split('weight')[-1]}"
+        to_negate_weights = copy.deepcopy(weight_columns)
+        for weight_column in to_negate_weights :
+            weight_column.is_inverted=not(weight_column.is_inverted)
+
+        output_weights = self.get_total_weight(to_negate_weights)
+        
+        output_weights[result_name] = 1.0 - np.array(output_weights["total_weight"]) # not eveything
+        output_weights.pop("total_weight")
+
+        result_weight_column = WeightColumn(name=result_name, is_log=False, is_inverted=False)
+        self.samples[result_name]= output_weights[result_name]
+        self.weight_columns_available.append(result_weight_column)
+

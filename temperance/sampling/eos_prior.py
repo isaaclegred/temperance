@@ -4,6 +4,10 @@ import os
 
 from dataclasses import dataclass
 
+
+from universality.utils import io
+from universality.properties import samples
+
 # This is the eos set we use most often
 DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
                     "eos_column" : "eos",
@@ -15,6 +19,23 @@ DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
                                            "rhoc",
                                            "start_baryon_density",
                                            "end_baryon_density")}
+
+@dataclass
+class Extraction:
+    """
+    Get a particular EoS common quantity from a prior (i.e. extract per eos)
+
+    If dynamic is not None, we use this column to decide extraction values 
+    """
+    strategy : str
+    macro : bool
+    independent_variable : str = None
+    values : list[float] = None
+    dynamic : list[str] = None
+    branched : bool = True
+    selection_rule :str = "random"
+_known_extraction_strategies = ["extremize", "interpolation"]
+
 @dataclass
 class EoSPriorSet:
     """
@@ -53,15 +74,56 @@ class EoSPriorSet:
         if subdir is None:
             subdir = f"DRAWmod{self.eos_per_dir}-{eos_number//self.eos_per_dir:06d}"
         return os.path.join(self.macro_dir, subdir,
-                            self.eos_path_template%{"draw" : eos_number})
-    def get_path_template(self, base=None, eos_dir=None):
+                            self.macro_path_template%{"draw" : eos_number})
+    def get_path_template(self, base=None, eos_dir=None, macro=False):
         """
         This is the format universality expects this path to be in
         """
         if base is None:
-            base = self.eos_path_template
+            if macro:
+                base = self.macro_path_template
+            else:
+                base = self.eos_path_template
         if eos_dir is None:
             eos_dir=self.eos_dir
         return os.path.join(eos_dir,
                             f"DRAWmod{self.eos_per_dir}-%(moddraw)06d", 
                             base)
+    
+    def get_property(self, eos_indices,
+                     dependent_variables=["R"],
+                     extraction=Extraction("interpolation", True, "M",  [1.6, 1.8]), **kwargs):
+        if extraction.strategy == "extremize":
+            # call to process2extrema
+            
+            return eos_indices
+        elif extraction.strategy == "interpolation":
+            # call process2samples
+            if extraction.dynamic is not None:
+                dynamic_kwargs = {"dynamic_x_text" : np.array(extraction.dynamic)}
+            else:
+                dynamic_kwargs = {}
+            if extraction.branched:
+                branches_kwargs = {"branches_mapping":self.branches_data}
+            else:
+                branches_kwargs = {}
+            data = samples.process2samples(
+                np.array(eos_indices),
+                self.get_path_template(macro=extraction.macro),
+                self.eos_per_dir,
+                extraction.independent_variable,
+                dependent_variables,
+                static_x_test=extraction.values,
+                **dynamic_kwargs,
+                **branches_kwargs,
+                **kwargs)
+            ref_columns = extaction.dynamic.columns if extraction.dynamic is not None else []
+            columns=samples.outputcolumns(dependent_variables,
+                                          extraction.independent_variable,
+                                          reference_values=extraction.values,
+                                          reference_columns=ref_columns)
+            return pd.DataFrame(data, columns=columns)
+        else:
+            raise ValueError(f"Unknown extraction strategy, {extraction.strategy},"
+                             "try one of {_known_extraction_strategies}")
+        

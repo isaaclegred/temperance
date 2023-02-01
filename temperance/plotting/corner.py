@@ -15,10 +15,10 @@ import temperance.core.result as result
 
 
 def get_default_plot_settings(matplotlib):
-    matplotlib.rcParams['xtick.labelsize'] = 22.0
-    matplotlib.rcParams['ytick.labelsize'] = 22.0
-    matplotlib.rcParams['axes.labelsize'] = 22.0
-    matplotlib.rcParams['legend.fontsize'] = 22.0
+    matplotlib.rcParams['xtick.labelsize'] = 18.0
+    matplotlib.rcParams['ytick.labelsize'] = 18.0
+    matplotlib.rcParams['axes.labelsize'] = 18.0
+    matplotlib.rcParams['legend.fontsize'] = 18.0
     matplotlib.rcParams['font.family']= 'Times New Roman'
     matplotlib.rcParams['font.sans-serif']= ['Bitstream Vera Sans']
     matplotlib.rcParams['text.usetex']= True
@@ -74,6 +74,7 @@ class PlottableColumn:
     true_value : float = None
     log_column : bool = False
     column_multiplier : float = None
+    alternate_units : tuple[str, float, float] = None
     def get_plottable_data(self, samples):
         column_data  = np.array(samples[self.name])
         if self.log_column:
@@ -83,6 +84,8 @@ class PlottableColumn:
         return column_data
     def get_plottable_true_value(self):
         true_value = self.true_value
+        if true_value is None:
+            return None
         if self.log_column:
             true_value = np.log(true_value)
         if self.column_multiplier is not None:
@@ -104,6 +107,11 @@ class PlottableSamples:
     alpha: float = None
     linestyle: str = "-"
     linewidth: float = 2.0
+    def get_data(self, plottable_columns:list[PlottableColumn]):
+        data = pd.DataFrame()
+        for column in plottable_columns:
+            data[column.name] = column.get_plottable_data(self.samples)
+        return data
 
 @dataclass
 class PlottableEoSSamples:
@@ -129,7 +137,7 @@ class PlottableEoSSamples:
             elif column.name in self.additional_properties.keys():
                 additional_columns.append(column.name)
             else:
-                raise KeyError(f"Column {column_name} not found in either the "
+                raise KeyError(f"Column {column.name} not found in either the "
                                "EoS or additional_properties files")
         # This is reasonable assuming that (1) most of the time the EoS
         # file will not contain all of the data we need and (2)
@@ -188,6 +196,37 @@ def corner_samples(plottable_samples, use_universality=False,
     truths = [column.true_value for column in columns_to_plot]
     ranges = [column.plot_range for column in columns_to_plot]
     column_labels= [column.label for column in columns_to_plot]
+    if use_universality:
+        lines = [] # hack for getting legend in a controlled  way
+        for samples in plottable_samples:
+            # legend getting hack (0,1  and  0,1 don't mean anything)
+            if legend:
+                lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
+                                     color=samples.color), samples.label))
+                data = np.array(samples.get_data(columns_to_plot))
+                weights_df = result.get_total_weight(samples.samples,
+                                              samples.weight_columns_to_use)
+                weights = weights_df["total_weight"]
+            fig = uplot.kde_corner(data,
+                               bandwidths=bandwidths,
+                               truths=truths,
+                               ranges=ranges,
+                               weights=weights,
+                               labels=column_labels,
+                               fig=fig,
+                               color=samples.color,
+                               alpha=samples.alpha,
+                               linewidth=samples.linewidth,
+                               linestyle=samples.linestyle,
+                               **kwargs)
+        if legend:
+            leg = fig.legend([line[0] for line in lines],[line[1] for line in lines],
+                             loc="upper right", frameon=True,
+                             fancybox=True, fontsize=18)
+            for line in leg.get_lines():
+                line.set_linewidth(samples.linewidth)
+        return fig
+
     
 def corner_eos(plottable_samples,  use_universality=True,
                columns_to_plot=None, legend=True, fig=None,  *args, **kwargs):
@@ -210,7 +249,8 @@ def corner_eos(plottable_samples,  use_universality=True,
     truths = [[column.get_plottable_true_value()] for column in columns_to_plot]
     ranges = [column.plot_range for column in columns_to_plot]
     column_labels= [column.label for column in columns_to_plot]
-
+    alternate_column_units = [
+        column.alternate_units for column in columns_to_plot]
     
     
     
@@ -232,7 +272,7 @@ def corner_eos(plottable_samples,  use_universality=True,
             fig = uplot.kde_corner(data,
                                    bandwidths=bandwidths,
                                    truths=truths,
-                                   range=ranges,
+                                   ranges=ranges,
                                    weights=weights,
                                    labels=column_labels,
                                    fig=fig,
@@ -240,11 +280,12 @@ def corner_eos(plottable_samples,  use_universality=True,
                                    alpha=samples.alpha,
                                    linewidth=samples.linewidth,
                                    linestyle=samples.linestyle,
+                                   alternate_units=alternate_column_units,
                                    **kwargs)
         if legend:
             leg = fig.legend([line[0] for line in lines],[line[1] for line in lines],
                              loc="upper right", frameon=True,
-                             fancybox=True, fontsize=13)
+                             fancybox=True, fontsize=18)
             for line in leg.get_lines():
                 line.set_linewidth(samples.linewidth)
         return fig
