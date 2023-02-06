@@ -7,6 +7,8 @@
 *.pdf
 *.png
 
+# results
+*.csv
 
 # Editor filesx
 *#

@@ -65,9 +65,13 @@ class EoSPriorSet:
                            macro_dir=DEFAULT_EOS_DATA["eos_dir"]
                            
         )
-    def get_eos_path(self, eos_number, subdir=None):
+    def get_eos_path(self, eos_number, subdir=None, explicit_path=None):
         if subdir == None:
             subdir = f"DRAWmod{self.eos_per_dir}-{eos_number//self.eos_per_dir:06d}"
+        if explicit_path is None:
+            local_path = self.eos_path_template%{"draw" : eos_number}
+        else:
+            local_path = explicit_path%{"draw": eos_number}
         return os.path.join(self.eos_dir, subdir,
                             self.eos_path_template%{"draw" : eos_number})
     def get_macro_path(self, eos_number, subdir=None):

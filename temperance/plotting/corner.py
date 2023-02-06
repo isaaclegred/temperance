@@ -104,6 +104,7 @@ class PlottableSamples:
     weight_columns_to_use: list[result.WeightColumn]
     max_samples:int =None
     color: str = None
+    contour_colors: str=None
     alpha: float = None
     linestyle: str = "-"
     linewidth: float = 2.0
@@ -120,6 +121,7 @@ class PlottableEoSSamples:
     weight_columns_to_use: list[result.WeightColumn]
     additional_properties : pd.DataFrame 
     color: str
+    contour_colors: list[str]=None
     alpha: float = None
     linestyle: str = "-"
     linewidth: float = 2.0
@@ -201,8 +203,12 @@ def corner_samples(plottable_samples, use_universality=False,
         for samples in plottable_samples:
             # legend getting hack (0,1  and  0,1 don't mean anything)
             if legend:
+                if type(samples.color) is not str:
+                    color = samples.color[0]
+                else:
+                    color = samples.color
                 lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
-                                     color=samples.color), samples.label))
+                                     color=color), samples.label))
                 data = np.array(samples.get_data(columns_to_plot))
                 weights_df = result.get_total_weight(samples.samples,
                                               samples.weight_columns_to_use)
@@ -215,6 +221,7 @@ def corner_samples(plottable_samples, use_universality=False,
                                labels=column_labels,
                                fig=fig,
                                color=samples.color,
+                               contour_colors=samples.contour_colors,
                                alpha=samples.alpha,
                                linewidth=samples.linewidth,
                                linestyle=samples.linestyle,
@@ -261,14 +268,19 @@ def corner_eos(plottable_samples,  use_universality=True,
 
             # legend getting hack (0,1  and  0,1 don't mean anything)
             if legend:
+                if type(samples.color) is not str:
+                    color = samples.color[0]
+                else:
+                    color = samples.color
                 lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
-                                     color=samples.color), samples.label))
+                                     color=color), samples.label))
             data = np.array(samples.get_data(columns_to_plot))
             weights_df = samples.posterior.get_total_weight(
                 samples.weight_columns_to_use)
             weights = np.array(pd.merge(weights_df,
                                         samples.additional_properties,
                                         on=samples.posterior.eos_column)["total_weight"])
+            print(data.shape)
             fig = uplot.kde_corner(data,
                                    bandwidths=bandwidths,
                                    truths=truths,
