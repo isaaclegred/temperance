@@ -280,7 +280,6 @@ def corner_eos(plottable_samples,  use_universality=True,
             weights = np.array(pd.merge(weights_df,
                                         samples.additional_properties,
                                         on=samples.posterior.eos_column)["total_weight"])
-            print(data.shape)
             fig = uplot.kde_corner(data,
                                    bandwidths=bandwidths,
                                    truths=truths,

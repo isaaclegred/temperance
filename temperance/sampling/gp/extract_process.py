@@ -12,8 +12,8 @@ import temperance.plotting.envelope as envelope
 envelope.get_defaults(mpl, 18)
 
 
-def plot_covariance(cov, axis_values=None):
-    plt.matshow(cov,  norm=mpl.colors.Normalize(vmin=0, vmax=2), cmap=mpl.cm.plasma)
+def plot_covariance(cov, axis_values=None, plot_kwargs = {"norm":mpl.colors.Normalize(vmin=0, vmax=.5), "cmap":mpl.cm.plasma}):
+    plt.matshow(cov,  **plot_kwargs)
     default_x_ticks = np.arange(0, len(cov), 100)
     print(axis_values)
     if axis_values is not None:
@@ -58,10 +58,11 @@ def extract_gp_from_posterior(
 
 if __name__ == "__main__":
     eos_posterior=EoSPosterior.from_csv(
-        "~/PTAnalysis/Analysis/collated_dbhf_post.csv", label="dbhf")
+        "~/PTAnalysis/Analysis/collated_dbhf_2507_post.csv", label="dbhf_2507d")
     weight_columns=[result.WeightColumn("logweight_total")]
     #weight_columns=[]
-    mean, cov, logp= extract_gp_from_posterior(eos_posterior, weight_columns=weight_columns, max_num_eos=3000)
+    mean, cov, logp= extract_gp_from_posterior(eos_posterior, weight_columns=weight_columns,
+                                               max_num_eos=3000)
     print(mean)
     print(cov)
     print(logp)

@@ -99,7 +99,7 @@ def get_quantiles(eos_posterior,  weight_columns=None,
         quantiles=quantiles,
         x_test=x_points,
         weights=weights[truth], selection_rule=selection_rule,
-        branches_mapping=branches_data)
+        branches_mapping=branches_data,  **kwargs)
     quantiles = pd.DataFrame(
         raw_quantiles,
         columns = [f"{variables[1]}(variables[0]={x_val})" for x_val in x_points])

@@ -454,10 +454,8 @@ class PlottableQuantiles:
             indices = self.posterior.sample(
                 columns=[self.posterior.eos_column],
                 size=num_draws, weight_columns=self.weight_columns)
-            print(indices)
             for counter, draw_index in enumerate(indices[self.posterior.eos_column]):
                 if is_macro:
-                    print("is this working?")
                     data = pd.read_csv(self.prior_set.get_macro_path(int(draw_index)))
                     if counter == 0:
                         
@@ -473,7 +471,7 @@ class PlottableQuantiles:
                         ax.plot(data[x_var], data[y_var], color=self.color, label = self.label, **self.plot_kwargs)
                     else:
                         ax.plot(data[x_var], data[y_var], color=self.color, **self.plot_kwargs)
-                print(data)
+                        
                 
 
         return ax
