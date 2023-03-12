@@ -11,6 +11,7 @@ from matplotlib.lines import Line2D
 from matplotlib import pyplot as plt
 
 
+
 import temperance.core.result as result
 
 
@@ -209,10 +210,10 @@ def corner_samples(plottable_samples, use_universality=False,
                     color = samples.color
                 lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
                                      color=color), samples.label))
-                data = np.array(samples.get_data(columns_to_plot))
-                weights_df = result.get_total_weight(samples.samples,
+            data = np.array(samples.get_data(columns_to_plot))
+            weights_df = result.get_total_weight(samples.samples,
                                               samples.weight_columns_to_use)
-                weights = weights_df["total_weight"]
+            weights = weights_df["total_weight"]
             fig = uplot.kde_corner(data,
                                bandwidths=bandwidths,
                                truths=truths,
@@ -221,7 +222,6 @@ def corner_samples(plottable_samples, use_universality=False,
                                labels=column_labels,
                                fig=fig,
                                color=samples.color,
-                               contour_colors=samples.contour_colors,
                                alpha=samples.alpha,
                                linewidth=samples.linewidth,
                                linestyle=samples.linestyle,
@@ -268,7 +268,7 @@ def corner_eos(plottable_samples,  use_universality=True,
 
             # legend getting hack (0,1  and  0,1 don't mean anything)
             if legend:
-                if type(samples.color) is not str:
+                if not matplotlib.colors.is_color_like(samples.color) :
                     color = samples.color[0]
                 else:
                     color = samples.color

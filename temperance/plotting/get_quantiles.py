@@ -140,7 +140,7 @@ def get_cs2_of_rho_quantiles(eos_posterior,  weight_columns=None,
 
 def get_r_of_m_quantiles(eos_posterior,  weight_columns=None,
                   variables=("M", "R"),
-                        x_points=np.linspace(0.8, 2.2, 100),
+                        x_points=np.linspace(0.8, 2.1, 100),
                          **kwargs):
     """
     Default call to get m-r quantiles
