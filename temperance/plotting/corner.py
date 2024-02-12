@@ -125,6 +125,8 @@ class PlottableEoSSamples:
     contour_colors: list[str]=None
     alpha: float = None
     linestyle: str = "-"
+    filled: bool = False
+    filled1D: bool = False
     linewidth: float = 2.0
     def guarantee_consistent_order(self):
         self.additional_properties = pd.merge(
@@ -291,6 +293,8 @@ def corner_eos(plottable_samples,  use_universality=True,
                                    alpha=samples.alpha,
                                    linewidth=samples.linewidth,
                                    linestyle=samples.linestyle,
+                                   filled=samples.filled,
+                                   filled1D=samples.filled1D,
                                    alternate_units=alternate_column_units,
                                    **kwargs)
         if legend:

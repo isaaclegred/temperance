@@ -84,7 +84,7 @@ def get_quantiles(eos_posterior,  weight_columns=None,
                                    weight_columns=[])
     weights = np.array(result.get_total_weight(samples, weight_columns)["total_weight"])
     truth = weights > weight_threshold * max(weights)
-    data = np.array(samples["eos"])
+    data = np.array(samples[eos_posterior.eos_column])
     branches_data=None if not(use_macro) else eos_data.branches_data
     template_base = (eos_data.eos_path_template
                      if not(use_macro) else

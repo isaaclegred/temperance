@@ -14,10 +14,10 @@ import copy
 def get_property_list(class_list, target_property):
     map(class_list, lambda elt : elt.target_property)
 
-_default_uniform_mass_data = {"low": 1.0, "high": 3.0,
-                              "mass_1_name": "m_1",
-                              "mass_2_name": "m_2"}    
-def _uniform_mass_samples(
+_default_uniform_mass_data = {"low": 1.0, "high": 2.5,
+                              "mass_1_name": "m1",
+                              "mass_2_name": "m2"}    
+def uniform_mass_samples(
         N=1, seed=None,
         low=_default_uniform_mass_data["low"],
         high=_default_uniform_mass_data["high"],
@@ -30,7 +30,7 @@ def _uniform_mass_samples(
     # So we flip them to have mass_1 > mass_2
     pd.DataFrame({mass_1_name:samples[:,1], mass_2_name: samples[:, 0]})
 
-def _uniform_mass_pdf(
+def uniform_mass_pdf(
         sample,            
         low=_default_uniform_mass_data["low"],
         high=_default_uniform_mass_data["high"],
@@ -42,11 +42,11 @@ def _uniform_mass_pdf(
     and on this range it is uniform
     if no_range_check is True assume the sample is in the region of support
     """
-    if (no_range_check or # do the check
-        high >= sample[mass_1_name] >= sample[mass_2_name] >= low):
-        return 1/(high - low)**2 * 2
+    if (not no_range_check):
+        return np.where(np.logical_and(np.logical_and(high >= sample[mass_1_name],  sample[mass_2_name] >= low), sample[mass_1_name]>=  sample[mass_2_name]), 
+         1/(high - low)**2 * 2, 0.0)
     else:
-        return 0.0
+        return 1/(high - low)**2 * 2
     
         
 
@@ -60,8 +60,8 @@ class Prior:
     mass_1 is greater than mass_2
 
     """
-    def __init__(self, name="original", pdf=_uniform_mass_pdf,
-                 sample=_uniform_mass_samples):
+    def __init__(self, name="original", pdf=uniform_mass_pdf,
+                 sample=uniform_mass_samples):
         self.name = name
         self.pdf = pdf
         self.sample = sample 

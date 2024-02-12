@@ -104,7 +104,7 @@ class EoSPriorSet:
         elif extraction.strategy == "interpolation":
             # call process2samples
             if extraction.dynamic is not None:
-                dynamic_kwargs = {"dynamic_x_text" : np.array(extraction.dynamic)}
+                dynamic_kwargs = {"dynamic_x_test" : np.array(extraction.dynamic)}
             else:
                 dynamic_kwargs = {}
             if extraction.branched:
@@ -121,10 +121,10 @@ class EoSPriorSet:
                 **dynamic_kwargs,
                 **branches_kwargs,
                 **kwargs)
-            ref_columns = extaction.dynamic.columns if extraction.dynamic is not None else []
+            ref_columns = extraction.dynamic.columns if extraction.dynamic is not None else []
             columns=samples.outputcolumns(dependent_variables,
                                           extraction.independent_variable,
-                                          reference_values=extraction.values,
+                                          reference_values=[] if extraction.values is None else extraction.values,
                                           reference_columns=ref_columns)
             return pd.DataFrame(data, columns=columns)
         else:
