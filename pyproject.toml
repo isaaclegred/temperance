@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["temperance"]
+include = ["*"]
+
+[project]
+name = "temperance"
+version = "2024.5.10"
+dependencies = [
+  "numpy",
+  "pandas",
+  "universality",
+  "scipy",
+  "bilby"
+]
+
+requires-python = ">=3.8"
+authors = [
+  {name = "Isaac Legred", email = "ilegred@caltech.edu"}
+]
+maintainers = [
+  {name = "Isaac Legred", email = "ilegred@caltech.edu"}
+]
+description = "An interface for astrophysical data and inference of the nuclear EoS"
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python"
+]
+
+
+[project.urls]
+Homepage = "https://github.com/isaaclegred/temperance"
+
+
+
+
+
