@@ -19,23 +19,23 @@ def weigh_samples_by_likelihood(samples, likelihood,  weight_tag, additional_sam
       samples: Samples to be weighed by the likelihood
       likelihood: The likelihood to evaluate on samples (may be given by, e.g.,
       a density estimate)
-      additional_samples: dataframe auxiliary data that may contribute to the
-      likelihood evaluation (e.g. EoS maximum mass needed to compute occam factors)
-      m_max_column: the name of the m_max column in either the EoS posterior 
-      or the additional_samples
-      minimum_mass: the minimum mass of a neutron star in the population, 
-      used to compute the occam factor
       weight_tag: the label of the output weight column, should not contain 
       "weight" or "logweight"
+      additional_samples: dataframe auxiliary data that may contribute to the
+      likelihood evaluation (e.g. EoS maximum mass needed to compute occam factors)
       log_output_weight: whether to log the output weight, will modify the 
       weight column name
+      auxiliary_dependent_additional_factor: A function which takes any additional samples
+      and assigns an additional multiplicative weight to the likelihood
     Returns:
       weight_column: The  WeightColumn which was added to the EoS Posterior 
       representing the weights
     """
     weight_column_name = f"{'logweight' if log_output_weight else 'weight'}_{weight_tag}"
     weight_column = result.WeightColumn(weight_column_name, is_log=log_output_weight)
-    weights = likelihood(samples) * auxiliary_dependent_additional_factor(additional_samples)
+    weights = likelihood(samples)
+    if auxiliary_dependent_additional_factor is not None:
+        weights *= auxiliary_dependent_additional_factor(additional_samples)
     samples[weight_column_name] = np.log(weights) if log_output_weight else weights
     return samples, weight_column
 
@@ -44,6 +44,24 @@ def weigh_samples_by_likelihood(samples, likelihood,  weight_tag, additional_sam
 
 def generate_mr_samples(eos_posterior, eos_prior_set,  mass_prior_class,
                         num_samples_per_eos, mass_prior_kwargs={"m_min":1.0}):
+    """
+    A helper function that probably doesn't belong here.  Generate m-r samples
+    for use in evaluating a mass-radius likelihood.
+    Arguments:
+      eos_posterior: An EoSPosterior
+      eos_prior_set: The EoSPriorSet corresponding to the eos_posterior
+      mass_prior_class: A constructor for the mass prior which will be sampled 
+      to get the mass prior.  This class must implement a `sample` method
+      num_samples_per_eos: the number of monte carlo samples used to resolve 
+      each eos, for most application should be large enough that 
+      num_samples_per_eos * (width of mass measurement)/ (maximum mass - 1) >> 1 
+      mass_prior_kwargs: additional kwargs to pass to the mass_prior_class
+      constructor
+    Return:
+      mr_samples: a DataFrame of samples with eos, eos maximum tov mass,  mass, radius.
+      There will generically be many m-r samples for each eos.
+      
+    """
     # EoS samples
     eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column, "Mmax"]]
     # columns are "eos-mmax(eos)-mass-radius"
@@ -67,9 +85,23 @@ def generate_mr_samples(eos_posterior, eos_prior_set,  mass_prior_class,
                         columns=[eos_posterior.eos_column, "Mmax", "M", "R"])
             
 
-def weigh_mr_samples(mr_samples, nicer_data_samples, prior_column=result.WeightColumn("Prior"), density_estimate=None,
+def weigh_mr_samples(mr_samples, nicer_data_samples=None,
+                     prior_column=result.WeightColumn("Prior"), density_estimate=None,
                      bandwidth=None):
+    """
+    Weigh a set of mass-radius samples by a density estimate for the likelihood.
+    Arguments:
+      mr_samples: The samples which have been drawn to evaluate the likelihood on.
+      nicer_data_samples:  The samples whose density should be estimated to construct the likelihood
+      prior_column: The column which should be read from the `nicer_data_samples` column to divide out, 
+      i.e. assuming the nicer_data_samples are drawn from the posterior on the event.
+      density_estimate: If a likelihood can be represented in some other way, it can be passed as an argument
+      here and `nicer_data_samples` will not be used
+      bandwidth: the bandwidth to be used in density estimation, if it is known.
+    """
     if bandwidth is None:
+        # Use separate bandwidths for the mass and radius bandwidths, because in all the cases we look at they are
+        # very different.  
         print("Finding the bandwidth...")
         r_bandwidth = kde.silverman_bandwidth(nicer_data_samples["R"].to_numpy(), weights=np.exp(-np.array(nicer_data_samples["Prior"])))
         m_bandwidth = kde.silverman_bandwidth(nicer_data_samples["M"].to_numpy(), weights=np.exp(-np.array(nicer_data_samples["Prior"])))
