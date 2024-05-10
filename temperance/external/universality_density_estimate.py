@@ -5,7 +5,10 @@ from universality import stats
 from universality import plot
 
 import temperance.core.stats
-import temperance.core.result
+import temperance.core.result as result
+
+import numpy as np
+import pandas as pd
 
 class kde_function:
     """
@@ -14,7 +17,7 @@ class kde_function:
     
     
     """
-    def __init__(samples, weight_columns, sample_columns):
+    def __init__(self, samples, weight_columns, sample_columns):
         """
         ========
         Requires
@@ -30,8 +33,8 @@ class kde_function:
         iterable of temperance.core.stats.SamplesColumn,
         columns to build the kde over
         """
-        self.data = np.array(samples[column.name
-                                     for column in sample_columns])
+        self.data = np.array(samples[[column.name
+                                      for column in sample_columns]])
         self.variances = np.array([column.bandwidth
                                    for column in sample_columns] )
         self.weights = result.get_total_weight(samples, weight_columns,
@@ -39,22 +42,22 @@ class kde_function:
         self.samples = samples
         self.weight_columns = weight_columns
         self.sample_columns = sample_columns
-
-
-    )
-    def samples_to_input(samples):
-        return [np.array(column) for column in (*np.array(samples).tolist())]
-    def __call__(samples):
+    def samples_to_input(self, samples):
+        return np.transpose(np.array([samples[column] for column in samples]))
+        
+    def __call__(self, samples):
+        #print(kde.vects2flatgrid(*self.samples_to_input(samples)))
+        print("samples_to_input", self.samples_to_input(samples).shape)
         return kde.logkde(
-            kde.vects2flatgrid(*samples_to_input(samples)),
+            self.samples_to_input(samples),
             self.data,
             self.variances,
             weights=self.weights,
     )
-    def argmax(samples):
-        return stats.logkde2argmax(samples_to_input(samples), logkde)
-    def information(samples):
-        return stats.logkde2entropy(samples_to_input(samples), logkde)
-    def entropy(samples):
-        stats.logkde2entropy(samples_to_input(samples), logkde)
+    def argmax(self, samples):
+        return stats.logkde2argmax(self.samples_to_input(samples), self.logkde)
+    def information(self, samples):
+        return stats.logkde2entropy(self.samples_to_input(samples), self.logkde)
+    def entropy(self, samples):
+        stats.logkde2entropy(self.samples_to_input(samples), self.logkde)
 

@@ -40,10 +40,6 @@ def get_phi_of_logp(
     indices = np.array(eos_posterior.sample(
         size=max_num_eos, weight_columns=weight_columns,
         replace=False)["eos"], dtype=int)
-    print("indices are", indices)
-    print("default_file is", eos_prior_set.get_eos_path(
-            indices[0],
-            explicit_path=gpr_path_template))
     default_file = pd.read_csv(
         eos_prior_set.get_eos_path(
             indices[0],
@@ -119,18 +115,15 @@ def extract_classification_model_from_posterior(
             
     raw_data = np.transpose(np.array(tracks)[:, :]) # just the values of the dependent variable
     print("nans at", np.where(raw_data != raw_data))
+    print("eos broken:", indices[np.where(raw_data != raw_data)[0][:]])
     gm = GaussianMixture(n_components=n_components, covariance_type=covariance_type).fit(raw_data)
 
     predicted_classes = gm.predict(raw_data)
     classes = [raw_data[predicted_classes==i, :] for i in np.unique(predicted_classes)]
-    print("zeroth class is raw_data?", np.all(raw_data == classes[0]))
-    print("zeroth class data shape", classes[0].shape)
-    print("classes are",classes)
     classes_gms = [(np.mean(class_data, axis=0),
                     np.cov(class_data, rowvar=False)) for class_data in classes]
-    print("classes are:", [class_[1].shape  for class_ in classes_gms])
+
     weights = [sum(predicted_classes==i) for i in np.unique(predicted_classes)]
-    print("predicted_classes are ", predicted_classes)
     print(np.mean(classes[0],  axis=0))
     print(classes_gms[0][0])
     return classes_gms, interpolation_logp if interpolation_logp is not None else np.array(default_data[variables[0]]), weights

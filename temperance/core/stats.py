@@ -3,13 +3,13 @@ import pandas as pd
 import universality
 from universality import stats
 from dataclasses import dataclass
+import scipy.interpolate as interpolate
 
+import temperance.core.result as result 
+from temperance.core.result import EoSPosterior
+from temperance.sampling.eos_prior import EoSPriorSet
 
-import temperance.core.result
-import tempernace.core.result.EoSPosterior
-import temperance.sampling.eos_prior.EoSPrior
-
-import temperance.plotting.corner.PlottableSamples
+from temperance.plotting.corner import  PlottableSamples
 
 
 @dataclass
@@ -74,21 +74,16 @@ class DensityEstimate:
         self.density_function = density_function(self.samples,
                                                  self.weight_columns,
                                                  self.sample_columns)
-    def __call__(samples):
-        return density_function(sample)
-    def entropy(samples):
-        return density_function.entropy(samples)
-    def information(samples):
-        return density_function.information(samples)
-    def argmax(samples):
-        return density_function.argmax(samples)
+    def __call__(self, samples):
+        return self.density_function(samples)
+    def entropy(self, samples):
+        return self.density_function.entropy(samples)
+    def information(self, samples):
+        return self.density_function.information(samples)
+    def argmax(self, samples):
+        return self.density_function.argmax(samples)
 
     
-
-def extract_quantiles(samples, weight_columns, sample_columns,
-                      density_estimate=None, target_ ):
-    
-    if density_estimate is None:
         
         
         

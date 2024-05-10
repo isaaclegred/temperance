@@ -417,7 +417,7 @@ class PlottableQuantiles:
     quantiles : pd.DataFrame
     posterior : EoSPosterior
     weight_columns : list[result.WeightColumn] = None
-    prior_set : EoSPriorSet=EoSPriorSet.get_default()
+    prior_set : EoSPriorSet=field(default_factory=EoSPriorSet.get_default())
     color : str = None
     lw : float = 2.0
     scale_x : float = 1.0

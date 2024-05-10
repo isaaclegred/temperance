@@ -86,10 +86,13 @@ def marginalize_over_samples(data,
     count = data.shape[0]
     prior_weights = prior(data)
     if compute_column_is_log:
-        lmw = np.log((prior_weights*np.exp(np.array(data[column_to_compute]))).sum())
+        lmw = np.log(
+            (prior_weights*np.exp(
+                np.array(data[column_to_compute]))).sum())
         if track_variance:
             lmw2 = np.log(
-                (prior_weights*np.exp(2*np.array(data[column_to_compute]))).sum())
+                (prior_weights*np.exp(
+                    2*np.array(data[column_to_compute]))).sum())
         else :
             lmw2 = np.nan
         neff = stats.neff(prior_weights)
@@ -540,7 +543,7 @@ class EoSPosterior:
         weights = self.get_total_weight(weight_columns_to_use)["total_weight"]
         if prior is None:
             if prior_weight_columns is None:
-                prior = self.eos_prior_weights
+                prior = self.get_total_weight([])["total_weight"]
             else:
                 prior = self.get_total_weight(prior_weight_columns)["total_weight"]
         print(max(weights))
