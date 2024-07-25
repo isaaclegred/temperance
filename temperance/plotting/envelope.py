@@ -64,7 +64,7 @@ def get_file_type(variables, explicit_file_type=None):
     elif ("baryon_density"  in variables or "pressurec2" in variables or "energy_densityc2" in variables or "cs2c2" in variables):
         return "eos-draw-"
     else :
-        raise("unrecognized variables", variable)
+        raise ("unrecognized variables", variables)
 def get_logweights(weight_file, eos_column="eos", logweight_column="logweight_total"):
     '''
     Get a Dictionary of logweights from a file with eoss and logweights
@@ -417,7 +417,7 @@ class PlottableQuantiles:
     quantiles : pd.DataFrame
     posterior : EoSPosterior
     weight_columns : list[result.WeightColumn] = None
-    prior_set : EoSPriorSet=field(default_factory=EoSPriorSet.get_default())
+    prior_set : EoSPriorSet=field(default_factory=EoSPriorSet.get_default)
     color : str = None
     lw : float = 2.0
     scale_x : float = 1.0

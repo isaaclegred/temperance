@@ -45,6 +45,7 @@ def find_2d_eos_by_optimizing_ye(thermo, nb, t, yq):
     #return  thermo.sort_values("f_per_nbmn_minus_1").groupby(["iT", "inb"]).head(1).sort_values(["inb","iT"])
     #return  thermo[thermo["iYq"] == min(thermo["iYq"])]
     return  thermo.sort_values("e_per_nbmn_minus_1").groupby(["iT", "inb"]).head(1).sort_values(["inb","iT"])
+
 def plot_2d_eos(thermo, nb, t):
     NB, T = np.meshgrid(nb["nb"], t["T"])
     plt.contourf(NB, T,  np.reshape(np.array(limited_thermo["p_per_nb"]),

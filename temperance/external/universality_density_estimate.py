@@ -47,7 +47,6 @@ class kde_function:
         
     def __call__(self, samples):
         #print(kde.vects2flatgrid(*self.samples_to_input(samples)))
-        print("samples_to_input", self.samples_to_input(samples).shape)
         return kde.logkde(
             self.samples_to_input(samples),
             self.data,
