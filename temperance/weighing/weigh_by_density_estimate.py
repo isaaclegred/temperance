@@ -134,6 +134,7 @@ def weigh_mr_samples(
     prior_column=result.WeightColumn("Prior"),
     density_estimate=None,
     bandwidth=None,
+    bandwidth_factor=1/20
 ):
     """
     Weigh a set of mass-radius samples by a density estimate for the likelihood.
@@ -145,8 +146,10 @@ def weigh_mr_samples(
       density_estimate: If a likelihood can be represented in some other way, it can be passed as an argument
       here and `nicer_data_samples` will not be used
       bandwidth: the bandwidth to be used in density estimation, if it is known.
+      bandwidth_factor:  if not None, then multiply this factor into the bandwidth used by
+      the kde, whether it is specified or computed internally. Default of 1/20 seen to work
+      for existing NICER targets.  
     """
-    print("nicer data samples", nicer_data_samples)
     if bandwidth is None:
         # Use separate bandwidths for the mass and radius bandwidths, because in all the cases we look at they are
         # very different.
@@ -159,15 +162,16 @@ def weigh_mr_samples(
             nicer_data_samples["M"].to_numpy(),
             weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
         )
- 
+    if bandwidth_factor is None:
+      bandwidth_factor = 1.0
 
     if density_estimate is None:
         density_estimate = ude.kde_function(
             nicer_data_samples,
             weight_columns=[prior_column],
             sample_columns=[
-                SamplesColumn("M", label="M", bandwidth=m_bandwidth/20),
-                SamplesColumn("R", label="R", bandwidth=r_bandwidth/20),
+                SamplesColumn("M", label="M", bandwidth=m_bandwidth * bandwidth_factor),
+                SamplesColumn("R", label="R", bandwidth=r_bandwidth * bandwidth_factor),
             ],
         )
     return density_estimate(mr_samples)
