@@ -539,16 +539,18 @@ class EoSPosterior:
         """
         Estimate the evidence associated with this EOS Posterior,
         int P(d|e)pi(e)de, with e the eos, 
+
+        Mostly taken from analogous function in universality
         """
         weights = self.get_total_weight(weight_columns_to_use)["total_weight"]
+        count = len(weights)
         if prior is None:
             if prior_weight_columns is None:
+                # Normalize by the correct prior 
                 prior = self.get_total_weight([])["total_weight"]
             else:
                 prior = self.get_total_weight(prior_weight_columns)["total_weight"]
-        print(max(weights))
         prior /= sum(prior)
-        count = len(weights)
         squares = weights**2
         # TODO : find a way to do this that is computationally efficient and
         # doesn't look weird
