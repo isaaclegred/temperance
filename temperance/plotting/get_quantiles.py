@@ -161,6 +161,26 @@ def get_lambda_of_m_quantiles(eos_posterior,  weight_columns=None,
                          **kwargs
                          )
 
+def get_M_of_rhoc_quantiles(eos_posterior,  weight_columns=None,
+                  variables=("rhoc", "M"),
+                        x_points=np.linspace(2.8e14, 2.8e15, 100), **kwargs):
+    """
+    Default call to get cs2-rho quantiles
+    """
+    return get_quantiles(eos_posterior, weight_columns=weight_columns,
+                         variables=variables, x_points=x_points,
+                         use_macro=True,
+                         **kwargs)
+def get_R_of_rhoc_quantiles(eos_posterior,  weight_columns=None,
+                  variables=("rhoc", "R"),
+                        x_points=np.linspace(2.8e14, 2.8e15, 100), **kwargs):
+    """
+    Default call to get cs2-rho quantiles
+    """
+    return get_quantiles(eos_posterior, weight_columns=weight_columns,
+                         variables=variables, x_points=x_points,
+                         use_macro=True,
+                         **kwargs)
 
 
 if __name__ == "__main__":

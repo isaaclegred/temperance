@@ -555,6 +555,7 @@ class EoSPosterior:
         # TODO : find a way to do this that is computationally efficient and
         # doesn't look weird
         evidence = np.sum(weights * prior)
+        print("weights", weights)
         var_evidence = np.sum(prior**2)*np.sum((squares - evidence**2) * prior)
         return evidence, var_evidence
 

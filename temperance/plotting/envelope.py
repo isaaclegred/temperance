@@ -147,8 +147,8 @@ def plot_fair_draws(these_logweights, these_vars, eos_dir, N=1, regularize_cs2_s
         plt.plot(*data, color=color, lw=lw)
 
 # Special helper functions for normalizing a rho axis
-get_x_label = lambda normalize_axis : '$\\rho \,(\mathrm{g/cm}^3)$' if not normalize_axis else  \
-    '$\\rho \,( \\rho_{\mathrm{nuc}})$'
+get_x_label = lambda normalize_axis : r'$\\rho \,(\mathrm{g/cm}^3)$' if not normalize_axis else  \
+    r'$\\rho \,( \\rho_{\mathrm{nuc}})$'
 def get_x_lim(normalize_axis, zoom=False):
     if zoom:
         lims = (1.5*rhonuc,2.5*rhonuc) 
@@ -231,7 +231,7 @@ def complete_p_rho_plot(divide_by_rho_nuc=False, ax=None, zoom=False, legend_loc
 
     ax.figure.tight_layout()
     ax.grid(alpha=0.5)
-    ax.set_ylabel('$ p \,(\mathrm{dyn/cm}^2)$')
+    ax.set_ylabel(r'$ p \,(\mathrm{dyn/cm}^2)$')
 
     ax.set_xlabel(get_x_label(divide_by_rho_nuc))
   
@@ -241,9 +241,9 @@ def complete_p_rho_plot(divide_by_rho_nuc=False, ax=None, zoom=False, legend_loc
     if divide_by_rho_nuc:
         plt.xticks([.5,1,2,3,4,5,6,7,8,9], labels =["0.5", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
     if not divide_by_rho_nuc:
-        ax.figure.text(3e14,0.6e32,'$\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
-        ax.figure.text(6e14,0.8e32,'$2\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
-        ax.figure.text(18e14,0.8e32,'$6\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
+        ax.figure.text(3e14,0.6e32,r'$\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
+        ax.figure.text(6e14,0.8e32,r'$2\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
+        ax.figure.text(18e14,0.8e32,r'$6\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
 
 
 
@@ -324,8 +324,8 @@ def complete_mr_plot(ax=None, ylim=(.8, 2.2), xlim=(8,14)):
         plt.sca(ax)
     plt.tight_layout()
     plt.grid(alpha=0.5)
-    plt.xlabel('$ R$ (km)')
-    plt.ylabel('$M \, (M_{\odot})$')
+    plt.xlabel(r'$ R$ (km)')
+    plt.ylabel(r'$M \, (M_{\odot})$')
     plt.ylim(ylim)
     plt.xlim(xlim)
 
@@ -395,18 +395,18 @@ def complete_cs2_plot(divide_by_rho_nuc=False, log_cs2_axis=True, ax=None):
 
     plt.tight_layout()
     plt.grid(alpha=0.5)
-    plt.ylabel('$ c_s^2/c^2$')
+    plt.ylabel(r'$ c_s^2/c^2$')
     plt.xlabel(get_x_label(divide_by_rho_nuc))
     plt.xlim(get_x_lim(divide_by_rho_nuc))
     plt.ylim(0.005,1.1)
     plt.legend(frameon=True,fancybox=True,framealpha=.4,fontsize=18, loc="lower right")
     if not divide_by_rho_nuc:
-        plt.text(3e14,0.6e32,'$\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
-        plt.text(6e14,0.8e32,'$2\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
-        plt.text(18e14,0.8e32,'$6\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
-        plt.text(.3*rhonuc,0.37,'$c_s^2/c^2 = 1/3$',fontsize=22)
+        plt.text(3e14,0.6e32,r'$\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
+        plt.text(6e14,0.8e32,r'$2\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
+        plt.text(18e14,0.8e32,r'$6\\rho_{\mathrm{nuc}}$',fontsize=28,rotation=90)
+        plt.text(.3*rhonuc,0.37,r'$c_s^2/c^2 = 1/3$',fontsize=22)
     else:
-        plt.text(.3,0.37,'$c_s^2/c^2 = 1/3$',fontsize=22)
+        plt.text(.3,0.37,r'$c_s^2/c^2 = 1/3$',fontsize=22)
         plt.xticks([.5,1,2,3,4,5,6,7,8,9], labels =["0.5", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
 
 

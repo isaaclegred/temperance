@@ -168,7 +168,7 @@ def weigh_mr_samples(
     if density_estimate is None:
         density_estimate = ude.kde_function(
             nicer_data_samples,
-            weight_columns=[prior_column],
+            weight_columns=[prior_column.get_inverse()],
             sample_columns=[
                 SamplesColumn("M", label="M", bandwidth=m_bandwidth * bandwidth_factor),
                 SamplesColumn("R", label="R", bandwidth=r_bandwidth * bandwidth_factor),
