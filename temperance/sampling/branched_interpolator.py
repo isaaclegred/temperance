@@ -29,7 +29,7 @@ def get_branches(eos, properties = ["R", "Lambda", "I"]):
             # Worst case but we still cover it. This is the definition
             # of what an EoS must be able to do
             property_and_data = {macro_property : eos[macro_property] for macro_property in properties }
-            eos = pd.DataFrame({"M": eos["M"], "Lambda": eos["Lambda"]})
+            eos = pd.DataFrame({"M": eos["M"], "Lambda": eos["Lambda"], "R" : eos["R"]})
     def segments(split_eos):
         segment_diff = split_eos.index - np.arange(split_eos.shape[0])
         return segment_diff
@@ -134,10 +134,12 @@ def choose_macro_per_m(m, eos, black_hole_values, choice_function=None, branches
                          
         if unstable["m"].shape[0] == 0:
             return {"m" :stable["m"], **{macro_property: stable[macro_property] for macro_property in black_hole_values.keys()}}
-        elif stable["m"].shape[0] == 0:
-            return {"m": unstable["m"], **{macro_property: unstable[macro_property] for macro_property in black_hole_values.keys()}}
-        return {"m" :np.concatenate([stable["m"], unstable["m"]]),
-                **{macro_property: np.concatenate([stable[macro_property], unstable[macro_property]]) for macro_property in black_hole_values.keys()}}
+        # print("Warning! I'm not confident the masses will be returned in the order they were passed in with")
+        
+        # elif stable["m"].shape[0] == 0:
+        #     return {"m": unstable["m"], **{macro_property: unstable[macro_property] for macro_property in black_hole_values.keys()}}
+        # return {"m" :np.concatenate([stable["m"], unstable["m"]]),
+        #         **{macro_property: np.concatenate([stable[macro_property], unstable[macro_property]]) for macro_property in black_hole_values.keys()}}
     if interpolators is None:
         interpolators = get_macro_interpolators(branches, properties)
     branch_availability= np.empty((len(m),  len(branches)))

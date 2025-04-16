@@ -1,6 +1,8 @@
 import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
+from temperance.sampling.eos_prior import EoSPriorSet
+from temperance.sampling.eos_prior import EoSPriorH5
 import temperance.external.universality_density_estimate as ude
 try:
   import universality.kde as kde
@@ -19,6 +21,7 @@ import numpy as np
 import pandas as pd
 import bilby
 import copy
+import h5py
 
 
 
@@ -66,6 +69,9 @@ def weigh_samples_by_likelihood(
 # gw_mass_prior = bilby.gw.prior.BNSPriorDict()
 
 
+  
+
+
 def generate_mr_samples(
     eos_posterior,
     eos_prior_set,
@@ -91,6 +97,12 @@ def generate_mr_samples(
       There will generically be many m-r samples for each eos.
 
     """
+    def get_macro(eos_index):
+        if isinstance(eos_prior_set, EoSPriorH5):
+            return eos_prior_set.get_macro(int(eos_index))
+        elif isinstance(eos_prior_set, EoSPriorSet):
+            return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+          
     # EoS samples
     eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column, "Mmax"]]
     # columns are "eos-mmax(eos)-mass-radius"
@@ -105,7 +117,7 @@ def generate_mr_samples(
         if "m_max" not in mass_prior_kwargs_local.keys():
            mass_prior_kwargs_local["m_max"] = eoss_to_use["Mmax"].iloc[i]
         mass_prior = mass_prior_class(**mass_prior_kwargs_local)
-        eos_table = pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+        eos_table = get_macro(int(eos_index))
         mass_samples = mass_prior.sample(num_samples_per_eos)
         samples = b_interp.choose_macro_per_m(
             mass_samples,
@@ -164,13 +176,15 @@ def weigh_mr_samples(
         )
     if bandwidth_factor is None:
       bandwidth_factor = 1.0
-
+    print("m bandiwidth is", .5 * m_bandwidth * bandwidth_factor)
+    print("r bandiwidth is", r_bandwidth * bandwidth_factor)
+     
     if density_estimate is None:
         density_estimate = ude.kde_function(
             nicer_data_samples,
             weight_columns=[prior_column.get_inverse()],
             sample_columns=[
-                SamplesColumn("M", label="M", bandwidth=m_bandwidth * bandwidth_factor),
+                SamplesColumn("M", label="M", bandwidth=0.5 * m_bandwidth * bandwidth_factor),
                 SamplesColumn("R", label="R", bandwidth=r_bandwidth * bandwidth_factor),
             ],
         )

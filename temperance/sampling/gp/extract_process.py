@@ -76,15 +76,12 @@ def extract_classification_model_from_posterior(
         eos_prior_set=eos_prior.EoSPriorSet.get_default(),
         max_num_eos=2000, variables=("log(pressurec2)", "phi"),
         gpr_path_template='draw-gpr-%(draw)06d.csv',
+        construct_gpr=False,
         load_eos_kwargs={"skipfooter": 5, "engine":"python"},
         interpolation_logp=None, covariance_type="full"):
     indices = np.array(eos_posterior.sample(
         size=max_num_eos, weight_columns=weight_columns,
         replace=False)["eos"], dtype=int)
-    print("indices are", indices)
-    print("default_file is", eos_prior_set.get_eos_path(
-            indices[0],
-            explicit_path=gpr_path_template))
     default_file = pd.read_csv(
         eos_prior_set.get_eos_path(
             indices[0],
@@ -160,8 +157,9 @@ def extract_mixture_model_from_posterior(
         if interpolation_logp is not None:
             # print(default_data[variables[0]], tracks[eos_index])
             if i % 100 == 0:
-                print("interp_logp", interpolation_logp)
-                print("default data logp", default_data[variables[0]])
+                pass
+                #print("interp_logp", interpolation_logp)
+                #print("default data logp", default_data[variables[0]])
             tracks[eos_index] = interpolate.griddata(
                 np.array(default_data[variables[0]]),
                 data, interpolation_logp)

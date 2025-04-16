@@ -77,6 +77,7 @@ class PlottableColumn:
     column_multiplier : float = None
     alternate_units : tuple[str, float, float] = None
     def get_plottable_data(self, samples):
+        print("samples are", samples)
         column_data  = np.array(samples[self.name])
         if self.log_column:
             column_data = np.log(column_data)
@@ -151,6 +152,8 @@ class PlottableEoSSamples:
         joint_data = pd.merge(self.posterior.samples[eos_file_columns],
                               self.additional_properties[additional_columns],
                               on=self.posterior.eos_column)
+        print("joint data is", joint_data)
+        print("with unqiue entries", len(np.unique(joint_data["eos"])) )
         joint_data.pop(self.posterior.eos_column)
         for column in plottable_columns:
             joint_data[column.name] = column.get_plottable_data(joint_data)

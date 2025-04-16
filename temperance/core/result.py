@@ -577,7 +577,7 @@ class EoSPosterior:
         """
         total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
         nonnegligable = np.where(total_weight / np.sum(total_weight) > threshold)[0]
-        print(total_weight[nonnegligable])
+        #print(total_weight[nonnegligable])
         return stats.neff(total_weight[nonnegligable])
 
     def add_weight_column(self, weight_column, indexed_weights):
