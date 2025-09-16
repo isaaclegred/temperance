@@ -5,7 +5,8 @@ import bilby
 import seaborn as sns
 from dataclasses import dataclass
 import warnings
-import copy 
+import copy
+from scipy.special import xlogy
 
 # Utilities
 # to be factored out
@@ -577,6 +578,26 @@ class EoSPosterior:
         nonnegligable = np.where(total_weight / np.sum(total_weight) > threshold)[0]
         #print(total_weight[nonnegligable])
         return stats.neff(total_weight[nonnegligable])
+    def compute_kl_divergence_vs_prior(self, weight_columns_to_use, prior_weight_columns_to_use=[]):
+        total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
+        total_weight = np.nan_to_num(total_weight)
+        prior_weight = np.array(self.get_total_weight(prior_weight_columns_to_use)["total_weight"])
+        total_weight = total_weight / np.sum(total_weight)
+        prior_weight = prior_weight / np.sum(prior_weight)
+        return np.sum(xlogy(total_weight ,   total_weight/ prior_weight))
+    def compute_neff_kish(self, weight_columns_to_use=[], threshold=0.0, normalization_factor=1):
+        """
+        Compute the number of effective samples in the posterior using 
+        weight_columns_to_use, do not include samples which have a weight of 
+        threshold relative to the maxiumum weight in the posterior.
+        """
+        total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
+        exists =  np.logical_not(np.isnan(total_weight))
+        weight_exists = total_weight[exists]
+        nonnegligable = np.where(
+            weight_exists / np.sum(weight_exists) > threshold )[0]
+        #print(total_weight[nonnegligable])
+        return np.sum(weight_exists[nonnegligable] / normalization_factor)**2 / np.sum((weight_exists[nonnegligable]/normalization_factor)**2)
 
     def add_weight_column(self, weight_column, indexed_weights):
         """
