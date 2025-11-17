@@ -1,3 +1,4 @@
+import torch
 import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
@@ -15,6 +16,9 @@ except ImportError:
 
 import temperance.sampling.branched_interpolator as b_interp
 from temperance.core.stats import SamplesColumn
+
+from temperance.weighing import flow as tmflow
+safe_exp = tmflow.safe_exp
 
 
 import numpy as np
@@ -78,6 +82,7 @@ def generate_mr_samples(
     mass_prior_class,
     num_samples_per_eos,
     mass_prior_kwargs={"m_min": 1.0},
+    external_get_macro=None
 ):
     """
     A helper function that probably doesn't belong here.  Generate m-r samples
@@ -98,7 +103,9 @@ def generate_mr_samples(
 
     """
     def get_macro(eos_index):
-        if isinstance(eos_prior_set, EoSPriorH5):
+        if external_get_macro is not None:
+            return get_macro(eos_index)
+        elif isinstance(eos_prior_set, EoSPriorH5):
             return eos_prior_set.get_macro(int(eos_index))
         elif isinstance(eos_prior_set, EoSPriorSet):
             return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
@@ -168,11 +175,11 @@ def weigh_mr_samples(
  
         r_bandwidth = kde.silverman_bandwidth(
             nicer_data_samples["R"].to_numpy(),
-            weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
+            weights=safe_exp(-np.array(nicer_data_samples[prior_column.name])),
         )
         m_bandwidth = kde.silverman_bandwidth(
             nicer_data_samples["M"].to_numpy(),
-            weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
+            weights=safe_exp(-np.array(nicer_data_samples[prior_column.name])),
         )
     if bandwidth_factor is None:
       bandwidth_factor = 1.0
@@ -189,6 +196,7 @@ def weigh_mr_samples(
             ],
         )
     return density_estimate(mr_samples)
+
 
 
 def get_normalizing_flow_mr_likelihood_estimate(
@@ -208,23 +216,125 @@ Returns:
   A function which takes a sample and returns the likelihood of that sample
   """
   if prior_distribution is not None:
-    posterior_density_estimate = tmflow.generate_flow_density_estimate(
-      np.array(nicer_data_samples[["M", "R"]])
+    posterior_density_estimate = tmflow.generate_improved_flow_density_estimate(
+      np.array(nicer_data_samples[["M", "R"]]), weights=None
     )
-    return lambda sample: posterior_density_estimate(sample) / prior_distribution(
-      sample
-    )
+    return lambda sample: safe_exp(posterior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)) - 
+                                   prior_distribution.log_prob(torch.tensor(sample, dtype=torch.float)))
   else:
-    posterior_density_estimate = tmflow.generate_flow_density_estimate(
-      np.array(nicer_data_samples[["M", "R"]])
+    posterior_density_estimate = tmflow.generate_improved_flow_density_estimate(
+      np.array(nicer_data_samples[["M", "R"]]), weights=None
     )
-    prior_density_estimate = tmflow.generate_flow_density_estimate(
+    prior_density_estimate = tmflow.generate_improved_flow_density_estimate(
       np.array(nicer_data_samples[["M", "R"]]),
       weights=result.get_total_weight(
         nicer_data_samples,
         weight_columns=[result.WeightColumn.get_inverse(prior_column)],
       )["total_weight"],
     )
-    return lambda sample: posterior_density_estimate(
-      sample
-    ) / prior_density_estimate(sample)
+    return lambda sample: safe_exp(posterior_density_estimate.log_prob(
+      torch.tensor(sample, dtype=torch.float)
+    ) - prior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)))
+
+
+def generate_gw_samples(
+    eos_posterior,
+    eos_prior_set,
+    mass_prior_class,
+    num_samples_per_eos,
+    mass_prior_kwargs={"m_min": 1.0},
+    external_get_macro=None
+):
+    """
+    A helper function that probably doesn't belong here.  Generate m-lambda samples
+    for use in evaluating a mass-radius likelihood.
+    Arguments:
+      eos_posterior: An EoSPosterior
+      eos_prior_set: The EoSPriorSet corresponding to the eos_posterior
+      mass_prior_class: A constructor for the mass prior which will be sampled
+      num_samples_per_eos: the number of monte carlo samples used to resolve the likelihood
+      mass_prior_kwargs: additional kwargs to pass to the mass_prior_class
+      constructor
+    Returns:
+      mlambda_samples: a DataFrame of samples with eos, mass_1, mass_2, lambda_1, lambda_2.
+      There will generically be many pairs of m-lambda samples for each eos.
+
+    """
+    def get_macro(eos_index):
+        # external function to get the macro table for a given eos index
+        if external_get_macro is not None:
+            return external_get_macro(eos_index)
+        elif isinstance(eos_prior_set, EoSPriorH5):
+            return eos_prior_set.get_macro(int(eos_index))
+        elif isinstance(eos_prior_set, EoSPriorSet):
+            return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+          
+    # EoS samples
+    eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column]]
+    output_data = np.empty(
+        (len(eoss_to_use) * num_samples_per_eos, 4 + len(columns_to_copy))
+    )
+
+    
+    for i, eos_index in enumerate(eoss_to_use[eos_posterior.eos_column]):
+        mass_prior_kwargs_local = copy.deepcopy(mass_prior_kwargs)
+        mass_prior = mass_prior_class(**mass_prior_kwargs_local)
+        # Should be able to just plop something else in here
+        eos_table = get_macro(int(eos_index))
+        mass_1_samples = mass_prior.sample(num_samples_per_eos)
+        mass_2_samples = mass_prior.sample(num_samples_per_eos)
+        samples_1 = b_interp.choose_macro_per_m(
+            mass_1_samples,
+            eos_table,
+            black_hole_values={"lambda": lambda m: 0},
+            only_lambda=False,
+        )
+        samples_2 = b_interp.choose_macro_per_m(
+            mass_2_samples,
+            eos_table,
+            black_hole_values={"lambda": lambda m: 0},
+            only_lambda=False,
+        )
+        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 0] = (
+            eos_index
+        )
+        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 1] = eoss_to_use["Mmax"].iloc[i] 
+
+
+def get_normalizing_flow_gw_likelihood_estimate(
+    gw_data_samples,
+    prior_distribution=None,
+    prior_column=result.WeightColumn("Prior"),
+):
+  """
+  Get a likelihood estimate for the mass-radius samples using a normalizing flow.
+  Arguments:
+  gw_data_samples: The samples whose density should be estimated to construct the likelihood
+  prior_distribution: If the prior can be represented in some other way, it can be passed as an argument
+  here and `gw_data_samples` will not be used
+  prior_column: The column which should be read from the `gw_data_samples` column to divide out,
+  i.e. assuming the gw_data_samples are drawn from the posterior on the event.
+Returns:
+  A function which takes a sample and returns the likelihood of that sample
+  """
+  if prior_distribution is not None:
+    posterior_density_estimate = tmflow.generate_flow_density_estimate(
+      np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]])
+    )
+    return lambda sample: safe_exp(posterior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)) - prior_distribution.log_prob(
+      torch.tensor(sample, dtype=torch.float)
+    ))
+  else:
+    posterior_density_estimate = tmflow.generate_flow_density_estimate(
+      np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]])
+    )
+    prior_density_estimate = tmflow.generate_flow_density_estimate(
+      np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]]),
+      weights=result.get_total_weight(
+        gw_data_samples,
+        weight_columns=[result.WeightColumn.get_inverse(prior_column)],
+      )["total_weight"],
+    )
+    return lambda sample: safe_exp(posterior_density_estimate.log_prob(
+      torch.tensor(sample, dtype=torch.float)
+    ) - prior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)))

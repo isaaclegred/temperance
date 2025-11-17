@@ -12,16 +12,16 @@ import temperance.sampling.eos_prior as eos_prior
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior 
 import temperance.plotting.envelope as envelope
-envelope.get_defaults(mpl, 18)
+
 
 
 
 def plot_covariance(cov, axis_values=None,
                     plot_kwargs = {
                         "norm": mpl.colors.Normalize(vmin=0, vmax=.5),
-                        "cmap": mpl.cm.plasma}):
-    plt.matshow(cov,  **plot_kwargs)
-    default_x_ticks = np.arange(0, len(cov), 100)
+                        "cmap": mpl.cm.plasma}, log=False):
+    plt.matshow(np.log(cov) if log else cov,  **plot_kwargs)
+    default_x_ticks = np.arange(len(axis_values))[::5]
     if axis_values is not None:
         x_ticks = [f'{x:.2f}' for x in np.array(axis_values[default_x_ticks])/np.log(10)]
     else:
@@ -124,6 +124,46 @@ def extract_classification_model_from_posterior(
     print(np.mean(classes[0],  axis=0))
     print(classes_gms[0][0])
     return classes_gms, interpolation_logp if interpolation_logp is not None else np.array(default_data[variables[0]]), weights
+def extract_mixture_model_from_eos_set(
+        eos_posterior, weight_columns, gpr_element_accessor, n_components=1,
+        max_num_eos=2000, variables=("log(pressurec2)", "phi"),
+        interpolation_logp=None):
+    indices = np.array(eos_posterior.sample(
+        size=max_num_eos, weight_columns=weight_columns,
+        replace=True)[eos_posterior.eos_column], dtype=int)
+
+    default_file = gpr_element_accessor(indices[0])
+    default_data = default_file # [[*variables]]
+    size =  len(interpolation_logp) if interpolation_logp is not None else len(
+        np.array(default_data[variables[0]]))
+    tracks = pd.DataFrame(
+        np.empty((size, len(indices)), dtype=np.float64), columns=indices)
+    for i, eos_index in enumerate(indices):
+        data_tabulation_points = np.array(gpr_element_accessor(eos_index)[variables[0]])
+        data = np.array(gpr_element_accessor(eos_index)[variables[1]])
+        if interpolation_logp is not None:
+            # print(default_data[variables[0]], tracks[eos_index])
+            if i % 100 == 0:
+                pass
+                #print("interp_logp", interpolation_logp)
+                #print("default data logp", default_data[variables[0]])
+
+            tracks[eos_index] = interpolate.griddata(
+                data_tabulation_points,
+                data, interpolation_logp)
+
+            if np.any(np.isnan(tracks[eos_index])) or np.any(np.isnan(data_tabulation_points)):
+                print("eos index", eos_index, "has nans")
+                print("data is", data)
+                print("tabulation points are", data_tabulation_points)
+        else:
+            tracks[eos_index] = data
+            
+    raw_data = np.transpose(np.array(tracks)[:, :]) # just the values of the dependent variable
+    print("nans at", np.where(raw_data != raw_data))
+    gm = GaussianMixture(n_components=n_components).fit(raw_data)
+    return gm, interpolation_logp if interpolation_logp is not None else np.array(default_data[variables[0]])
+
 def extract_mixture_model_from_posterior(
         eos_posterior, weight_columns, n_components=1,
         eos_prior_set=eos_prior.EoSPriorSet.get_default(),
@@ -212,6 +252,7 @@ def extract_gp_from_posterior(
     return mean, cov, interpolation_logp if interpolation_logp is not None else np.array(default_data[variables[0]])
 
 if __name__ == "__main__":
+    envelope.get_defaults(mpl, 18)
     eos_posterior = EoSPosterior.from_csv(
         "~/PTAnalysis/Analysis/collated_dbhf_2507_post.csv", label="dbhf_2507d")
     weight_columns = [result.WeightColumn("logweight_total")]

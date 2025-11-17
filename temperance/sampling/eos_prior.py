@@ -197,18 +197,9 @@ class EoSPriorDistribution:
         
 class EoSPriorH5:
     def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns", index_to_key=lambda x : str(x)):
-        print(hasattr(self, "h5_path"))
         self.h5_path = str(h5_path)
-        print(hasattr(self, "h5_path"))
-        print("self is", self)
-        print("h5 path is", h5_path)
-        print("h5py file is", self.h5_path)
-        print("things are equal?", self.h5_path == h5_path)
-        self.h5_path = h5_path
-        print("things are equal now?", self.h5_path == h5_path)
-        
+        self.h5_path = h5_path        
         self.h5_file = h5py.File(name=self.h5_path)
-        print("h5 fil is", self.h5_file)
         self.eos_subgroup = self.h5_file[eos_subgroup_path]
         self.macro_subgroup = self.h5_file[macro_subgroup_path]
         self.index_to_key = index_to_key

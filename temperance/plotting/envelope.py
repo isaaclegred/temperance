@@ -17,7 +17,7 @@ from  temperance.sampling.eos_prior import EoSPriorSet
 
 
 
-import lal
+
 import scipy
 import random
 from random import randint
@@ -27,7 +27,7 @@ from scipy.interpolate import interp1d
 from scipy.integrate import solve_ivp
 
 
-c_cgs=lal.C_SI*100
+c_cgs=3e10
 rhonuc=2.8e14
 
 
@@ -249,7 +249,7 @@ def complete_p_rho_plot(divide_by_rho_nuc=False, ax=None, zoom=False, legend_loc
 
 
 
-Msol_in_km=lal.MSUN_SI*lal.G_SI/lal.C_SI/lal.C_SI/1000
+Msol_in_km = 1.477
  
 def plot_generic_mr_envelope(post_path, prior_path,
                              post_color="magenta", prior_color="red",
