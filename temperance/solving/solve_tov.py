@@ -44,14 +44,19 @@ except ImportError:
     pass
 
 class polytropic_eos:
-    def __init__(self, K, Gamma):
+    def __init__(self, K, Gamma, Gamma1=None):
         self.K = K
         self.Gamma = Gamma
+        if Gamma1 is None:
+            self.Gamma1 = Gamma
+        else:
+            self.Gamma1 = Gamma1
         self.rho_of_logenthalpy = lambda lnh: ((xp.exp(lnh) - 1.0) * (self.Gamma - 1.0) / (self.K * self.Gamma))**(1/(Gamma - 1.0))
         self.p_of_logenthalpy = lambda lnh: self.K * self.rho_of_logenthalpy(lnh)**self.Gamma
         self.e_of_logenthalpy = lambda lnh: self.rho_of_logenthalpy(lnh) + self.p_of_logenthalpy(lnh) / (self.Gamma - 1.0)
         # dp/drho/ de/drho = dp/drho / h
-        self.cs2_of_logenthalpy = lambda lnh: self.Gamma * self.K * (self.rho_of_logenthalpy(lnh)**(self.Gamma - 1.0)) / xp.exp(lnh)
+        # use out of equilibrium sound speed if it's available
+        self.cs2_of_logenthalpy = lambda lnh: self.Gamma1 * self.K * (self.rho_of_logenthalpy(lnh)**(self.Gamma - 1.0)) / xp.exp(lnh)
         self.logenthalpy_of_rho = lambda rho: xp.log(1.0 + self.K * (self.Gamma) 
                                             *(rho**(self.Gamma - 1.0)) / (self.Gamma - 1.0) ) 
         self.p_of_rho = lambda rho: self.K * rho**self.Gamma
@@ -78,7 +83,8 @@ class css_eos:
 
 
 class interpolated_eos:
-    def __init__(self, eos, conversion_factor = 1/2.8e14 * .00045):
+    # conversion factor from cgs to geometric units
+    def __init__(self, eos, conversion_factor=1/2.8e14 * .00045):
         self.eos = eos
         logenthalpy = xp.array(scipy.integrate.cumulative_trapezoid(
             1/(eos["pressurec2"] + eos["energy_densityc2"]), 
@@ -90,7 +96,10 @@ class interpolated_eos:
         print(baryon_density.shape)
         pressurec2 = xp.array(eos["pressurec2"]) * conversion_factor
         energy_densityc2 = xp.array(eos["energy_densityc2"]) * conversion_factor
-
+        baryon_density = xp.array(eos["baryon_density"])/conversion_factor
+        #jax.debug.print("Value of baryon_density: {baryon_density}", baryon_density=baryon_density)
+        pressurec2 = xp.array(eos["pressurec2"])/conversion_factor
+        energy_densityc2 = xp.array(eos["energy_densityc2"])/conversion_factor
         cs2 = xp.array(np.gradient(logenthalpy, np.log(baryon_density)))
         self.cs2_of_logenthalpy = interp1d((logenthalpy,), cs2, method="linear")
         self.rho_of_logenthalpy = interp1d((logenthalpy,), baryon_density, method="linear")
