@@ -8,6 +8,7 @@ from scipy.special import hyp2f1
 import matplotlib.pyplot as plt
 
 try :
+    raise ImportError
     import jax
     from jax import config
     from jax.scipy.integrate import trapezoid
@@ -21,12 +22,18 @@ try :
     from jax.experimental import ode
     from jax.scipy.interpolate import RegularGridInterpolator as interp1d
     ode_solver = ode.odeint
+    def print_val(statement, val):
+        jax.debug.print(statement, val=val)
 except ImportError:
     print("falling back to numpy")
     xp = np
     from scipy.interpolate import interp1d
     ode_solver = scipy.integrate.odeint
-
+    from scipy.interpolate import interp1d as spinterp1d
+    interp1d = lambda x, y, method, **kwargs : spinterp1d(x[0], y, **kwargs) 
+    def print_val(statement, **kwargs):
+        val = list(kwargs.items())[0]
+        print(f"{statement} = {val}")
 try :
     import jax.scipy as jsp
 except ImportError:
@@ -71,17 +78,19 @@ class css_eos:
 
 
 class interpolated_eos:
-    def __init__(self, eos):
+    def __init__(self, eos, conversion_factor = 1/2.8e14 * .00045):
         self.eos = eos
         logenthalpy = xp.array(scipy.integrate.cumulative_trapezoid(
             1/(eos["pressurec2"] + eos["energy_densityc2"]), 
             eos["pressurec2"], initial=0) + np.log(eos["energy_densityc2"][0]+ eos["pressurec2"][0]) - np.log(eos["baryon_density"][0]))
-        jax.debug.print("Value of logenthalpy: {logenthalpy}", logenthalpy=logenthalpy)
+        print_val("Value of logenthalpy: {logenthalpy}", logenthalpy=logenthalpy)
+        print(logenthalpy[:].shape)
+        baryon_density = xp.array(eos["baryon_density"]) * conversion_factor
+        print_val("Value of baryon_density: {baryon_density}", baryon_density=baryon_density)
+        print(baryon_density.shape)
+        pressurec2 = xp.array(eos["pressurec2"]) * conversion_factor
+        energy_densityc2 = xp.array(eos["energy_densityc2"]) * conversion_factor
 
-        baryon_density = xp.array(eos["baryon_density"])/2.8e14 * .00045
-        #jax.debug.print("Value of baryon_density: {baryon_density}", baryon_density=baryon_density)
-        pressurec2 = xp.array(eos["pressurec2"])/2.8e14 * .00045
-        energy_densityc2 = xp.array(eos["energy_densityc2"])/2.8e14 * .00045
         cs2 = xp.array(np.gradient(logenthalpy, np.log(baryon_density)))
         self.cs2_of_logenthalpy = interp1d((logenthalpy,), cs2, method="linear")
         self.rho_of_logenthalpy = interp1d((logenthalpy,), baryon_density, method="linear")
@@ -102,29 +111,39 @@ def lindblom_tidal_deformability_rhs(eta, u, du,  v, e, p, one_over_cs2, ell=2):
     B = 1 / f * ((ell + 1) * ell - 4 * xp.pi * u * (e + p) * (3 + one_over_cs2))
     return -prefactor * (eta * (eta- 1) + A * eta - B)
 
-def lindblom_solver(lnhc, eos, max_iter=1000, tol=1e-6, termination_lnh=1e-14, ell=2):
+def lindblom_solver(lnhc, eos, max_iter=1000, tol=1e-6, termination_lnh=1e-14, ell=2, points_to_solve_for=500):
     """
     Solve the TOV equations out to a surface of constant logenthalpy
     """
-    initial_stepsize = xp.array(1e-3)
+    # Initial step in logenthalpy
+    initial_stepsize = xp.array(1e-5) * lnhc
     ec = eos.e_of_logenthalpy(xp.array([lnhc]))[0]
-    rhoc = eos.rho_of_logenthalpy(xp.array([lnhc]))[0]
-    initial_v = 4/3*xp.pi*initial_stepsize**2*ec 
-    jax.debug.print("Value of ec: {ec}", ec=ec)
+    print_val("Logenthalpy central value  is:{lnhc}", lnhc=lnhc)
+    print_val("Value of ec: {ec}", ec=ec)
+    w_initial = eos.p_of_logenthalpy(xp.array([lnhc]))[0] / ec
     # u = r^2, v = m(r) / r, eta=ell
-    initial_state = xp.array([initial_stepsize**2, 4/3*xp.pi*initial_stepsize**2*ec, ell, 4/3*xp.pi*initial_stepsize**2*rhoc/xp.sqrt(1 - 2*initial_v)])
-    jax.debug.print("Initial state: {x}", x=initial_state)
+    initial_state = xp.array([6/np.sqrt(4 * np.pi * ec)*initial_stepsize/(1+3*w_initial), 2*initial_stepsize/(1+3*w_initial), ell, 0.0])
+    print_val("Initial state: {x}", x=initial_state)
     def rhs(state, minus_lnh):
         lnh = -minus_lnh
+        if lnh < 0.0:
+            # this is dumb, but can't guarantee the solver won't try to call the 
+            # rhs beyond the surface
+            du=100
+            dv=100
+            deta = 1000
+            dmb = 1000
+            return xp.array([du, dv, deta, dmb])
         u = state[0]
         v = state[1]
         eta = state[2]
         v_b = state[3]
+        #print_val("Value of lnh: {x}", x=lnh)
         p = eos.p_of_logenthalpy(xp.array([lnh]))[0]
         e = eos.e_of_logenthalpy(xp.array([lnh]))[0]
         cs2 = eos.cs2_of_logenthalpy(xp.array([lnh]))[0]
         rho = eos.rho_of_logenthalpy(xp.array([lnh]))[0]
-        # jax.debug.print("Value of lnh: {x}", x=lnh)
+
         # jax.debug.print("Value of p: {p}", p=p)
         # jax.debug.print("Value of e: {e}", e=e)
         # common factor
@@ -137,13 +156,16 @@ def lindblom_solver(lnhc, eos, max_iter=1000, tol=1e-6, termination_lnh=1e-14, e
         # jax.debug.print("Value of dv: {dv}", dv=dv)
         one_over_cs2 = 1/cs2
         deta = lindblom_tidal_deformability_rhs(eta, u, du, v, e, p, one_over_cs2, ell=ell)
+
         # Baryon mass equation is a bit different
         dv_b = (4 * xp.pi * rho / xp.sqrt(1 - 2*v) - v_b / u) * cf
 
         return xp.array([du, dv, deta, dv_b])
-    lnhs_solved = xp.linspace(-lnhc, -termination_lnh, 20)
+
+
+    lnhs_solved = xp.linspace(-lnhc, -termination_lnh, points_to_solve_for)
     solution = ode_solver(rhs, initial_state, lnhs_solved)
-    return lnhs_solved, solution
+    return -lnhs_solved, solution
 
 def eta_to_love_number(etaR, C, ell=2):
     """
@@ -203,7 +225,7 @@ def get_tov_family(eos, densities, outpath=None):
         Rs.append(np.sqrt(u_term) * 1.477) # in km
         Ms.append(np.sqrt(u_term) * v_term) # in solar masses
         Lambdas.append(eta_to_love_number(eta_term, v_term) )
-        rhocs.append(eos.rho_of_logenthalpy(-xp.array([lnhs[0]]))[0]*2.8e14/.00045)
+        rhocs.append(eos.rho_of_logenthalpy(xp.array([lnhs[0]]))[0]*2.8e14/.00045)
         Ms_baryon.append(np.sqrt(u_term) * vb_term)
     data = pd.DataFrame({"central_baryon_density": np.array(rhocs),  "M":np.array(Ms), "R":np.array(Rs), "Lambda":np.array(Lambdas), "M_baryon": np.array(Ms_baryon)})
     if outpath is not None:
