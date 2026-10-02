@@ -10,9 +10,10 @@
 # results
 *.csv
 
-# Editor filesx
+# Editor files
 *#
 *~
+*.vscode
 
 # Build
 build

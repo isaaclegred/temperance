@@ -6,7 +6,7 @@ import temperance as tmpy
 import temperance.external.read_3d_compose_table as tmcomp
 
 if __name__ == "__main__":
-    prefix = "sfho"
+    prefix = "qmc_rmf3"
     thermo_path = f"./{prefix}_thermo.csv"
     nb_path = f"./{prefix}_nb.csv"
     t_path = f"./{prefix}_t.csv"
