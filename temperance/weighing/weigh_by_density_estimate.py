@@ -1,24 +1,36 @@
-import torch
 import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
 from temperance.sampling.eos_prior import EoSPriorSet
 from temperance.sampling.eos_prior import EoSPriorH5
-import temperance.external.universality_density_estimate as ude
 try:
   import universality.kde as kde
 except ImportError:
   class kde:
-    import scipy.stats.gaussian_kde as gaussian_kde
     @staticmethod
-    def silverman_bandwidth(data, weights):
-      return gaussian_kde(data, weights=weights)
+    def silverman_bandwidth(data, weights=None):
+      """
+      Rule-of-thumb bandwidth, matching universality.kde.silverman_bandwidth;
+      used when universality is not installed.
+      """
+      data = np.asarray(data, dtype=float)
+      if weights is None:
+        std = np.std(data)
+        num = len(data)
+      else:
+        weights = np.asarray(weights, dtype=float) / np.sum(weights)
+        std = (np.sum(weights * data**2) - np.sum(weights * data)**2)**0.5
+        # effective sample size, exp(entropy) of the normalized weights
+        nonzero = weights[weights > 0]
+        num = np.exp(-np.sum(nonzero * np.log(nonzero)))
+      return 0.9 * std * num**(-0.2)
 
 import temperance.sampling.branched_interpolator as b_interp
 from temperance.core.stats import SamplesColumn
 
-from temperance.weighing import flow as tmflow
-safe_exp = tmflow.safe_exp
+# torch, pyro (via temperance.weighing.flow) and universality (via
+# temperance.external.universality_density_estimate) are optional, so they
+# are imported inside the functions that need them.
 
 
 import numpy as np
@@ -175,11 +187,11 @@ def weigh_mr_samples(
  
         r_bandwidth = kde.silverman_bandwidth(
             nicer_data_samples["R"].to_numpy(),
-            weights=safe_exp(-np.array(nicer_data_samples[prior_column.name])),
+            weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
         )
         m_bandwidth = kde.silverman_bandwidth(
             nicer_data_samples["M"].to_numpy(),
-            weights=safe_exp(-np.array(nicer_data_samples[prior_column.name])),
+            weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
         )
     if bandwidth_factor is None:
       bandwidth_factor = 1.0
@@ -187,6 +199,7 @@ def weigh_mr_samples(
     print("r bandiwidth is", r_bandwidth * bandwidth_factor)
      
     if density_estimate is None:
+        import temperance.external.universality_density_estimate as ude
         density_estimate = ude.kde_function(
             nicer_data_samples,
             weight_columns=[prior_column.get_inverse()],
@@ -215,6 +228,9 @@ def get_normalizing_flow_mr_likelihood_estimate(
 Returns:
   A function which takes a sample and returns the likelihood of that sample
   """
+  import torch
+  from temperance.weighing import flow as tmflow
+  safe_exp = tmflow.safe_exp
   if prior_distribution is not None:
     posterior_density_estimate = tmflow.generate_improved_flow_density_estimate(
       np.array(nicer_data_samples[["M", "R"]]), weights=None
@@ -317,6 +333,9 @@ def get_normalizing_flow_gw_likelihood_estimate(
 Returns:
   A function which takes a sample and returns the likelihood of that sample
   """
+  import torch
+  from temperance.weighing import flow as tmflow
+  safe_exp = tmflow.safe_exp
   if prior_distribution is not None:
     posterior_density_estimate = tmflow.generate_flow_density_estimate(
       np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]])

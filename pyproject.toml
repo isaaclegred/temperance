@@ -9,10 +9,15 @@ dependencies = [
   "numpy",
   "pandas",
   "scipy",
-  "bilby"
+  "bilby",
+  "matplotlib",
+  "seaborn",
+  "astropy",
+  "sympy",
+  "tqdm"
 ]
-
 requires-python = ">=3.8"
+
 authors = [
   {name = "Isaac Legred", email = "ilegred@caltech.edu"}
 ]
@@ -27,6 +32,12 @@ classifiers = [
   "Programming Language :: Python"
 ]
 
+
+[project.optional-dependencies]
+jax = ["jax"]
+ml = ["torch", "pyro-ppl"]
+lal = ["lalsuite"]
+test = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/isaaclegred/temperance"
