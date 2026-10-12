@@ -8,6 +8,8 @@ import warnings
 import copy
 from scipy.special import xlogy
 
+from .weights import neff
+
 # Utilities
 # to be factored out
 def get_property_list(class_list, target_property):
@@ -79,11 +81,11 @@ def marginalize_over_samples(data,
     of data in order to compute the marginalized value of the column
     `column_to_compute` under the prior `prior`
 
-    Mostly taken from universality (it may be more convenient to use
-    universality.utils.marginilize)
+    Mostly taken from universality.utils.marginalize
     """
     count = data.shape[0]
     prior_weights = prior(data)
+    sample_neff = neff(prior_weights)
     if compute_column_is_log:
         lmw = np.log(
             (prior_weights*np.exp(
@@ -94,14 +96,13 @@ def marginalize_over_samples(data,
                     2*np.array(data[column_to_compute]))).sum())
         else :
             lmw2 = np.nan
-        neff = stats.neff(prior_weights)
-        return lmw, lmw2, count, neff, prior_weights 
+        return lmw, lmw2, count, sample_neff, prior_weights 
     else:
         mw = np.sum(prior_weights*data[column_to_compute])
         if track_variance:
             mw2 = prior_weights * np.array(data[column_to_compute])**2
             
-        return mw, mw2, count, neff, prior_weights
+        return mw, mw2, count, sample_neff, prior_weights
     # TODO : make this precision-loss proof
 
 
@@ -577,7 +578,7 @@ class EoSPosterior:
         total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
         nonnegligable = np.where(total_weight / np.sum(total_weight) > threshold)[0]
         #print(total_weight[nonnegligable])
-        return stats.neff(total_weight[nonnegligable])
+        return neff(total_weight[nonnegligable])
     def compute_kl_divergence_vs_prior(self, weight_columns_to_use, prior_weight_columns_to_use=[]):
         total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
         total_weight = np.nan_to_num(total_weight)

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from solving.analytic_eos import polytropic_eos, interpolated_eos
-from solving.solve_tov import (
+from solving.solve_relativistic import (
     lindblom_solver,
     solve_tov,
     construct_star,

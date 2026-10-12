@@ -1,24 +1,13 @@
-import torch
 import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
-from temperance.sampling.eos_prior import EoSPriorSet
-from temperance.sampling.eos_prior import EoSPriorH5
-import temperance.external.universality_density_estimate as ude
-try:
-  import universality.kde as kde
-except ImportError:
-  class kde:
-    import scipy.stats.gaussian_kde as gaussian_kde
-    @staticmethod
-    def silverman_bandwidth(data, weights):
-      return gaussian_kde(data, weights=weights)
+from temperance.core import kde
 
 import temperance.sampling.branched_interpolator as b_interp
 from temperance.core.stats import SamplesColumn
 
-from temperance.weighing import flow as tmflow
-safe_exp = tmflow.safe_exp
+# torch and pyro (via temperance.weighing.flow) are optional, so they are
+# imported inside the functions that need them.
 
 
 import numpy as np
@@ -104,11 +93,8 @@ def generate_mr_samples(
     """
     def get_macro(eos_index):
         if external_get_macro is not None:
-            return get_macro(eos_index)
-        elif isinstance(eos_prior_set, EoSPriorH5):
-            return eos_prior_set.get_macro(int(eos_index))
-        elif isinstance(eos_prior_set, EoSPriorSet):
-            return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+            return external_get_macro(eos_index)
+        return eos_prior_set.get_macro(int(eos_index))
           
     # EoS samples
     eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column, "Mmax"]]
@@ -175,11 +161,11 @@ def weigh_mr_samples(
  
         r_bandwidth = kde.silverman_bandwidth(
             nicer_data_samples["R"].to_numpy(),
-            weights=safe_exp(-np.array(nicer_data_samples[prior_column.name])),
+            weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
         )
         m_bandwidth = kde.silverman_bandwidth(
             nicer_data_samples["M"].to_numpy(),
-            weights=safe_exp(-np.array(nicer_data_samples[prior_column.name])),
+            weights=np.exp(-np.array(nicer_data_samples[prior_column.name])),
         )
     if bandwidth_factor is None:
       bandwidth_factor = 1.0
@@ -187,7 +173,7 @@ def weigh_mr_samples(
     print("r bandiwidth is", r_bandwidth * bandwidth_factor)
      
     if density_estimate is None:
-        density_estimate = ude.kde_function(
+        density_estimate = kde.KDEFunction(
             nicer_data_samples,
             weight_columns=[prior_column.get_inverse()],
             sample_columns=[
@@ -215,6 +201,9 @@ def get_normalizing_flow_mr_likelihood_estimate(
 Returns:
   A function which takes a sample and returns the likelihood of that sample
   """
+  import torch
+  from temperance.weighing import flow as tmflow
+  safe_exp = tmflow.safe_exp
   if prior_distribution is not None:
     posterior_density_estimate = tmflow.generate_improved_flow_density_estimate(
       np.array(nicer_data_samples[["M", "R"]]), weights=None
@@ -264,10 +253,7 @@ def generate_gw_samples(
         # external function to get the macro table for a given eos index
         if external_get_macro is not None:
             return external_get_macro(eos_index)
-        elif isinstance(eos_prior_set, EoSPriorH5):
-            return eos_prior_set.get_macro(int(eos_index))
-        elif isinstance(eos_prior_set, EoSPriorSet):
-            return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+        return eos_prior_set.get_macro(int(eos_index))
           
     # EoS samples
     eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column]]
@@ -317,6 +303,9 @@ def get_normalizing_flow_gw_likelihood_estimate(
 Returns:
   A function which takes a sample and returns the likelihood of that sample
   """
+  import torch
+  from temperance.weighing import flow as tmflow
+  safe_exp = tmflow.safe_exp
   if prior_distribution is not None:
     posterior_density_estimate = tmflow.generate_flow_density_estimate(
       np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]])

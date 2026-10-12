@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-import universality
-from universality import stats
 from dataclasses import dataclass
 import scipy.interpolate as interpolate
 

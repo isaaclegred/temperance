@@ -2,9 +2,8 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass 
 from itertools import chain
+import warnings
 
-import universality as unvs
-import universality.plot as uplot
 
 import matplotlib
 from matplotlib.lines import Line2D
@@ -44,19 +43,19 @@ def generate_labels(name, extraction_variable, extraction_values,
             column_subscript[extraction_value] = extraction_value
         labels[f"{name}({extraction_variable}={extraction_value})"]= (
         f"${log_prefix}{column_abbreviation}_{{{column_subscript[extraction_value]}}}" +
-            f"\ [{column_units}]" + f"{log_suffix}$")
+            rf"\ [{column_units}]" + f"{log_suffix}$")
     return labels 
 
 _KNOWN_LABELS={"Mmax" : r"$M_{\max}$",
                **generate_labels("R", "M", [1.4, 1.6, 1.8, 2.0], "R",
-                                 column_units="\mathrm{km}"),
+                                 column_units=r"\mathrm{km}"),
                **generate_labels("pressurec2", "baryon_density",
                                  ["2.8e+14", "5.6e+14", "1.68e+15", "1.96e+15" ],
                                  "p", column_is_log=True,
                                  column_log_base = "10",
-                                 column_subscript=dict(zip( ["2.8e+14", "5.6e+14", "1.68e+15", "1.96e+15" ], [1.0, 2.0, 6.0, 8.0])), column_units="\mathrm{g}/\mathrm{cm}^3"),
+                                 column_subscript=dict(zip( ["2.8e+14", "5.6e+14", "1.68e+15", "1.96e+15" ], [1.0, 2.0, 6.0, 8.0])), column_units=r"\mathrm{g}/\mathrm{cm}^3"),
                **generate_labels("Lambda", "M", [1.4, 1.6, 1.8, 2.0], "Lambda",
-                                 column_units="\mathrm{km}")
+                                 column_units=r"\mathrm{km}")
 
                }
 
@@ -77,7 +76,6 @@ class PlottableColumn:
     column_multiplier : float = None
     alternate_units : tuple[str, float, float] = None
     def get_plottable_data(self, samples):
-        print("samples are", samples)
         column_data  = np.array(samples[self.name])
         if self.log_column:
             column_data = np.log(column_data)
@@ -131,7 +129,7 @@ class PlottableEoSSamples:
     linewidth: float = 2.0
     def guarantee_consistent_order(self):
         self.additional_properties = pd.merge(
-            self.posterior.samples[posterior.eos_column],
+            self.posterior.samples[self.posterior.eos_column],
             self.additional_properties,
             on=self.posterior.eos_column)
     def get_data(self, plottable_columns:list[PlottableColumn]):
@@ -152,8 +150,6 @@ class PlottableEoSSamples:
         joint_data = pd.merge(self.posterior.samples[eos_file_columns],
                               self.additional_properties[additional_columns],
                               on=self.posterior.eos_column)
-        print("joint data is", joint_data)
-        print("with unqiue entries", len(np.unique(joint_data["eos"])) )
         joint_data.pop(self.posterior.eos_column)
         for column in plottable_columns:
             joint_data[column.name] = column.get_plottable_data(joint_data)
@@ -193,11 +189,111 @@ def get_property_columns(plottable_samples):
     return property_columns
 
 
+def _legend_color(color):
+    """A single color for the legend entry, from a color or list of colors."""
+    if color is None or matplotlib.colors.is_color_like(color):
+        return color
+    return color[0]
+
+
+def _add_legend(fig, plottable_samples):
+    # legend getting hack (0,1  and  0,1 don't mean anything)
+    lines = [Line2D([0, 1], [0, 1], linestyle=samples.linestyle,
+                    color=_legend_color(samples.color))
+             for samples in plottable_samples]
+    leg = fig.legend(lines, [samples.label for samples in plottable_samples],
+                     loc="upper right", frameon=True,
+                     fancybox=True, fontsize=18)
+    for line in leg.get_lines():
+        line.set_linewidth(plottable_samples[-1].linewidth)
+    return leg
+
+
+def _shared_ranges(datasets, ranges):
+    """
+    Fill in missing plot ranges with the extent of the data, over every
+    dataset, so that overlaid corner plots share axes.
+    """
+    filled = []
+    for i, plot_range in enumerate(ranges):
+        if plot_range is not None:
+            filled.append(tuple(plot_range))
+            continue
+        values = np.concatenate([data[:, i][weights > 0] for data, weights in datasets])
+        low, high = np.min(values), np.max(values)
+        if low == high:  # corner can't plot a zero-width range
+            low, high = low - 0.5, high + 0.5
+        filled.append((low, high))
+    return filled
+
+
+def _corner_overlay(plottable_samples, datasets, columns_to_plot, fig=None,
+                    **kwargs):
+    """
+    Overlay one corner plot (from the `corner` package) per entry of
+    `plottable_samples`.  `datasets` holds the matching (data, weights)
+    arrays.  Extra kwargs go to corner.corner and override the defaults
+    below.
+    """
+    import corner
+
+    if any(column.alternate_units is not None for column in columns_to_plot):
+        warnings.warn("alternate_units are only supported with use_universality=True; ignoring them")
+    if any(column.bandwidth is not None for column in columns_to_plot):
+        warnings.warn("column bandwidths are only used with use_universality=True; "
+                      "pass smooth=/smooth1d= to control corner's smoothing")
+    # drop samples that can't be plotted
+    datasets = [(data[keep], weights[keep]) for data, weights in datasets
+                for keep in [np.all(np.isfinite(data), axis=1) & np.isfinite(weights)]]
+    ranges = _shared_ranges(datasets, [column.plot_range for column in columns_to_plot])
+    truths = [column.get_plottable_true_value() for column in columns_to_plot]
+    for samples, (data, weights) in zip(plottable_samples, datasets):
+        color = _legend_color(samples.color)
+        filled = getattr(samples, "filled", False)
+        filled1D = getattr(samples, "filled1D", False)
+        settings = dict(
+            range=ranges,
+            weights=weights,
+            labels=[column.label for column in columns_to_plot],
+            truths=truths if any(t is not None for t in truths) else None,
+            color=color,
+            levels=(0.5, 0.9),
+            plot_datapoints=False,
+            plot_density=False,
+            fill_contours=filled,
+            no_fill_contours=not filled,
+            hist_kwargs={"color": color, "alpha": samples.alpha,
+                         "linestyle": samples.linestyle,
+                         "linewidth": samples.linewidth,
+                         "histtype": "stepfilled" if filled1D else "step",
+                         "density": True},
+            contour_kwargs={"linestyles": samples.linestyle,
+                            "linewidths": samples.linewidth,
+                            **({"colors": samples.contour_colors}
+                               if samples.contour_colors is not None else {})},
+        )
+        settings.update(kwargs)
+        fig = corner.corner(data, fig=fig, **settings)
+    # each corner.corner call rescales the 1D panels to its own histogram;
+    # rescale them to fit every overlaid histogram
+    ndim = len(columns_to_plot)
+    axes = np.array(fig.axes).reshape(ndim, ndim)
+    for i in range(ndim):
+        tops = [patch.get_path().vertices[:, 1].max() for patch in axes[i, i].patches]
+        if tops:
+            axes[i, i].set_ylim(0, 1.1 * max(tops))
+    return fig
+
+
 def corner_samples(plottable_samples, use_universality=False,
                    columns_to_plot=None, legend=True, fig=None,
                    *args, **kwargs):
     """
     Make a corner plot of certain samples from some distribution
+
+    By default this uses the `corner` package, and extra kwargs go to
+    corner.corner.  With use_universality=True it uses universality's
+    kde_corner instead (requires universality), and extra kwargs go there.
     """
     column_names = [column.name for column in columns_to_plot]
     bandwidths = [column.bandwidth for column in columns_to_plot]
@@ -205,16 +301,8 @@ def corner_samples(plottable_samples, use_universality=False,
     ranges = [column.plot_range for column in columns_to_plot]
     column_labels= [column.label for column in columns_to_plot]
     if use_universality:
-        lines = [] # hack for getting legend in a controlled  way
+        import universality.plot as uplot
         for samples in plottable_samples:
-            # legend getting hack (0,1  and  0,1 don't mean anything)
-            if legend:
-                if type(samples.color) is not str:
-                    color = samples.color[0]
-                else:
-                    color = samples.color
-                lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
-                                     color=color), samples.label))
             data = np.array(samples.get_data(columns_to_plot))
             weights_df = result.get_total_weight(samples.samples,
                                               samples.weight_columns_to_use)
@@ -231,28 +319,41 @@ def corner_samples(plottable_samples, use_universality=False,
                                linewidth=samples.linewidth,
                                linestyle=samples.linestyle,
                                **kwargs)
-        if legend:
-            leg = fig.legend([line[0] for line in lines],[line[1] for line in lines],
-                             loc="upper right", frameon=True,
-                             fancybox=True, fontsize=18)
-            for line in leg.get_lines():
-                line.set_linewidth(samples.linewidth)
-        return fig
+    else:
+        datasets = [(np.array(samples.get_data(columns_to_plot), dtype=float),
+                     np.array(result.get_total_weight(
+                         samples.samples, samples.weight_columns_to_use)["total_weight"],
+                              dtype=float))
+                    for samples in plottable_samples]
+        fig = _corner_overlay(plottable_samples, datasets, columns_to_plot,
+                              fig=fig, **kwargs)
+    if legend:
+        _add_legend(fig, plottable_samples)
+    return fig
+
+
+def _eos_weights(samples):
+    """Total weight of each row of samples.get_data, in the same order."""
+    weights_df = samples.posterior.get_total_weight(samples.weight_columns_to_use)
+    return np.array(pd.merge(weights_df,
+                             samples.additional_properties,
+                             on=samples.posterior.eos_column)["total_weight"],
+                    dtype=float)
 
     
-def corner_eos(plottable_samples,  use_universality=True,
+def corner_eos(plottable_samples,  use_universality=False,
                columns_to_plot=None, legend=True, fig=None,  *args, **kwargs):
     """
     Make a corner plot of the data represented in the eos_posterior file 
     using the weight_columns in weight_columns_to_use
-    
-    if use_universality is true pass the extra arguments to universality, 
-    otherwise pass the extra arguments to seaborn plotting utilities (
-    the arguments will be different depending on the plotting utilities
-    currently I'll use seaborn.pairplot)
+
+    By default this uses the `corner` package, and extra kwargs go to
+    corner.corner (e.g. smooth, bins, levels).  With use_universality=True
+    it uses universality's kde_corner instead (requires universality), and
+    extra kwargs go there.
     """
     if columns_to_plot is None:
-        columns_to_plot = get_proprty_columns(plottable_samples[0])
+        columns_to_plot = get_property_columns(plottable_samples[0])
     
     column_names = [column.name for column in columns_to_plot]
 
@@ -267,29 +368,14 @@ def corner_eos(plottable_samples,  use_universality=True,
     
     
     if use_universality:
-        lines = [] # hack for getting legend in a controlled  way
+        import universality.plot as uplot
         for samples in plottable_samples:
-
-
-            # legend getting hack (0,1  and  0,1 don't mean anything)
-            if legend:
-                if not matplotlib.colors.is_color_like(samples.color) :
-                    color = samples.color[0]
-                else:
-                    color = samples.color
-                lines.append((Line2D([0,1], [0,1], linestyle=samples.linestyle,
-                                     color=color), samples.label))
             data = np.array(samples.get_data(columns_to_plot))
-            weights_df = samples.posterior.get_total_weight(
-                samples.weight_columns_to_use)
-            weights = np.array(pd.merge(weights_df,
-                                        samples.additional_properties,
-                                        on=samples.posterior.eos_column)["total_weight"])
             fig = uplot.kde_corner(data,
                                    bandwidths=bandwidths,
                                    truths=truths,
                                    ranges=ranges,
-                                   weights=weights,
+                                   weights=_eos_weights(samples),
                                    labels=column_labels,
                                    fig=fig,
                                    color=samples.color,
@@ -300,10 +386,12 @@ def corner_eos(plottable_samples,  use_universality=True,
                                    filled1D=samples.filled1D,
                                    alternate_units=alternate_column_units,
                                    **kwargs)
-        if legend:
-            leg = fig.legend([line[0] for line in lines],[line[1] for line in lines],
-                             loc="upper right", frameon=True,
-                             fancybox=True, fontsize=18)
-            for line in leg.get_lines():
-                line.set_linewidth(samples.linewidth)
-        return fig
+    else:
+        datasets = [(np.array(samples.get_data(columns_to_plot), dtype=float),
+                     _eos_weights(samples))
+                    for samples in plottable_samples]
+        fig = _corner_overlay(plottable_samples, datasets, columns_to_plot,
+                              fig=fig, **kwargs)
+    if legend:
+        _add_legend(fig, plottable_samples)
+    return fig

@@ -11,10 +11,6 @@ from temperance.core import result
 from  temperance.core.result import EoSPosterior
 import temperance.sampling.eos_prior as eos_prior
 
-from universality.utils import (utils, io)
-from universality.properties import samples as usamples
-from universality import plot
-
 # This is the eos set we use most often
 default_eos_prior= eos_prior.EoSPriorSet.get_default()
 default_eos_prior.eos_dir="/home/isaac.legred/local_mrgagn_big_with_cs2c2"
@@ -31,8 +27,10 @@ def get_quantiles(eos_posterior,  weight_columns=None,
                   use_macro=False, save_path=None, weight_threshold=-np.inf,
                   **kwargs):
     """
-    Currently a thin wrapper around universality's 
-    properties.samples.process2samples.
+    If `eos_data` is an EoSPriorDistribution (e.g. EoSPriorSet or
+    EoSPriorH5) the quantiles are computed with its get_quantiles; for the
+    legacy UniversalityEoSPriorSet this is a thin wrapper around
+    universality's properties.samples.process2quantiles.
     Given an EoS posterior, compute credible regions for 
     one variable at given values of another variable,
     
@@ -85,6 +83,13 @@ def get_quantiles(eos_posterior,  weight_columns=None,
     weights = np.array(result.get_total_weight(samples, weight_columns)["total_weight"])
     truth = weights > weight_threshold * max(weights)
     data = np.array(samples[eos_posterior.eos_column])
+    if isinstance(eos_data, eos_prior.EoSPriorDistribution):
+        raw_quantiles, med = eos_data.get_quantiles(
+            data[truth].astype(int), xcolumn=variables[0], ycolumn=variables[1],
+            x_test=x_points, quantiles=quantiles, weights=weights[truth],
+            macro=use_macro, selection_rule=selection_rule, **kwargs)
+        return _quantiles_frame(raw_quantiles, variables, x_points, save_path)
+    from universality.properties import samples as usamples
     branches_data=None if not(use_macro) else eos_data.branches_data
     template_base = (eos_data.eos_path_template
                      if not(use_macro) else
@@ -100,6 +105,10 @@ def get_quantiles(eos_posterior,  weight_columns=None,
         x_test=x_points,
         weights=weights[truth], selection_rule=selection_rule,
         branches_mapping=branches_data,  **kwargs)
+    return _quantiles_frame(raw_quantiles, variables, x_points, save_path)
+
+
+def _quantiles_frame(raw_quantiles, variables, x_points, save_path):
     quantiles = pd.DataFrame(
         raw_quantiles,
         columns = [f"{variables[1]}(variables[0]={x_val})" for x_val in x_points])
