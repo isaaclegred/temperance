@@ -27,10 +27,10 @@ def get_quantiles(eos_posterior,  weight_columns=None,
                   use_macro=False, save_path=None, weight_threshold=-np.inf,
                   **kwargs):
     """
-    If `eos_data` is an EoSPriorDistribution (e.g. NativeEoSPriorSet or
-    EoSPriorH5) the quantiles are computed natively with its get_quantiles;
-    otherwise (EoSPriorSet) this is a thin wrapper around universality's
-    properties.samples.process2quantiles.
+    If `eos_data` is an EoSPriorDistribution (e.g. EoSPriorSet or
+    EoSPriorH5) the quantiles are computed with its get_quantiles; for the
+    legacy UniversalityEoSPriorSet this is a thin wrapper around
+    universality's properties.samples.process2quantiles.
     Given an EoS posterior, compute credible regions for 
     one variable at given values of another variable,
     

@@ -14,7 +14,8 @@ dependencies = [
   "seaborn",
   "astropy",
   "sympy",
-  "tqdm"
+  "tqdm",
+  "corner"
 ]
 requires-python = ">=3.8"
 

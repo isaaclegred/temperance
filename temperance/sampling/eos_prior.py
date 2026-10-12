@@ -62,8 +62,8 @@ class BaseEoSPriorSet:
     draws
 
     This base class only knows where the draws live.  Use EoSPriorSet to
-    extract properties with universality, or NativeEoSPriorSet to extract
-    them without it.
+    extract properties, or UniversalityEoSPriorSet for the legacy
+    universality-based extraction.
     """
     eos_dir : str
     eos_column : str
@@ -124,11 +124,12 @@ class BaseEoSPriorSet:
 
 
 @dataclass
-class EoSPriorSet(BaseEoSPriorSet):
+class UniversalityEoSPriorSet(BaseEoSPriorSet):
     """
-    EoS prior set that extracts properties with universality's
+    Legacy EoS prior set that extracts properties with universality's
     properties.samples.process2samples, reading stable branches from
-    precomputed branches files (`branches_data`).  Requires universality.
+    precomputed branches files (`branches_data`).  Requires universality;
+    prefer EoSPriorSet.
     """
     def get_property(self, eos_indices,
                      dependent_variables=["R"],
@@ -240,7 +241,7 @@ class EoSPriorDistribution:
 
     # -----------------------------------------------------------------
     # Per-EoS property extraction, shared by every prior that can look up
-    # its draws by index (NativeEoSPriorSet, EoSPriorH5).  Subclasses
+    # its draws by index (EoSPriorSet, EoSPriorH5).  Subclasses
     # provide get_eos and get_macro; everything else is common.
     # -----------------------------------------------------------------
     def get_eos(self, eos_index):
@@ -253,14 +254,15 @@ class EoSPriorDistribution:
 
     def get_property(self, eos_indices,
                      dependent_variables=["R"],
-                     extraction=Extraction("interpolation", True, "M",  [1.6, 1.8]), **kwargs):
+                     extraction=Extraction("interpolation", True, "M",  [1.6, 1.8]),
+                     verbose=False, **kwargs):
         """
         Extract `dependent_variables` for each EoS in `eos_indices`, as
         described by `extraction`.  Extra kwargs are passed through to
-        `get_property_per_eos`.
+        `get_property_per_eos`; `verbose` prints progress.
 
         Returns a DataFrame with one row per EoS and columns named by
-        `output_columns`, the same layout as EoSPriorSet.get_property.
+        `output_columns`, the same layout as UniversalityEoSPriorSet.get_property.
         """
         if extraction.strategy == "extremize":
             # call to process2extrema
@@ -278,12 +280,18 @@ class EoSPriorDistribution:
             ref_columns = []
         if not static_x_test and dynamic_x_test is None:
             raise ValueError("extraction must specify `values` or `dynamic`")
-        data = np.array([
-            self.get_property_per_eos(
+        eos_indices = list(eos_indices)
+        data = []
+        for i, eos_index in enumerate(eos_indices):
+            if verbose:
+                print(f"\r    {i + 1}/{len(eos_indices)} eos {eos_index}", end="", flush=True)
+            data.append(self.get_property_per_eos(
                 eos_index, dependent_variables, extraction,
                 static_x_test + ([] if dynamic_x_test is None else list(dynamic_x_test[i])),
-                **kwargs)
-            for i, eos_index in enumerate(eos_indices)])
+                **kwargs))
+        if verbose:
+            print()
+        data = np.array(data)
         columns = output_columns(dependent_variables,
                                  extraction.independent_variable,
                                  reference_values=static_x_test,
@@ -467,12 +475,17 @@ def _interpolate_on_branch(x, y, x_test):
 
 
 @dataclass
-class NativeEoSPriorSet(BaseEoSPriorSet, EoSPriorDistribution):
+class EoSPriorSet(BaseEoSPriorSet, EoSPriorDistribution):
     """
-    EoS prior set that extracts properties without universality, using the
-    per-EoS extraction shared with EoSPriorH5 (EoSPriorDistribution).
-    BaseEoSPriorSet supplies get_eos and get_macro from the draw directories.
+    EoS prior set stored in the standard draw directories.  Properties are
+    extracted with the per-EoS extraction shared with EoSPriorH5
+    (EoSPriorDistribution), selecting stable branches on the fly; no
+    universality needed.  BaseEoSPriorSet supplies get_eos and get_macro.
     """
+
+
+# Name used for EoSPriorSet before it became the default
+NativeEoSPriorSet = EoSPriorSet
 
 
 class EoSPriorH5(EoSPriorDistribution):

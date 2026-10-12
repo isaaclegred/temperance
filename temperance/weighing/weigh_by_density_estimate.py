@@ -1,8 +1,6 @@
 import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
-from temperance.sampling.eos_prior import EoSPriorSet
-from temperance.sampling.eos_prior import EoSPriorH5
 from temperance.core import kde
 
 import temperance.sampling.branched_interpolator as b_interp
@@ -95,11 +93,8 @@ def generate_mr_samples(
     """
     def get_macro(eos_index):
         if external_get_macro is not None:
-            return get_macro(eos_index)
-        elif isinstance(eos_prior_set, EoSPriorH5):
-            return eos_prior_set.get_macro(int(eos_index))
-        elif isinstance(eos_prior_set, EoSPriorSet):
-            return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+            return external_get_macro(eos_index)
+        return eos_prior_set.get_macro(int(eos_index))
           
     # EoS samples
     eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column, "Mmax"]]
@@ -258,10 +253,7 @@ def generate_gw_samples(
         # external function to get the macro table for a given eos index
         if external_get_macro is not None:
             return external_get_macro(eos_index)
-        elif isinstance(eos_prior_set, EoSPriorH5):
-            return eos_prior_set.get_macro(int(eos_index))
-        elif isinstance(eos_prior_set, EoSPriorSet):
-            return pd.read_csv(eos_prior_set.get_macro_path(int(eos_index)))
+        return eos_prior_set.get_macro(int(eos_index))
           
     # EoS samples
     eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column]]
