@@ -6,9 +6,6 @@ import h5py
 from dataclasses import dataclass
 
 
-from universality.utils import io
-from universality.properties import samples
-
 # This is the eos set we use most often
 DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
                     "eos_column" : "eos",
@@ -36,15 +33,37 @@ class Extraction:
     branched : bool = True
     selection_rule :str = "random"
 _known_extraction_strategies = ["extremize", "interpolation"]
+_known_selection_rules = ["random", "min", "max", "nearest_neighbor"]
+
+# Column-name formats for extracted properties, matching universality
+VALUE_COLUMN_TEMPLATE = "%s(%s=%s)"      # y(x=value), for static x values
+REFERENCE_COLUMN_TEMPLATE = "%s(%s@%s)"  # y(x@column), for dynamic x values
+
+
+def output_columns(columns, reference, reference_values=(), reference_columns=()):
+    """
+    Names of the columns returned by get_property: for each dependent column,
+    one per static reference value, then one per dynamic reference column.
+    Mirrors universality.properties.samples.outputcolumns.
+    """
+    names = []
+    for column in columns:
+        names += [VALUE_COLUMN_TEMPLATE % (column, reference, val) for val in reference_values]
+        names += [REFERENCE_COLUMN_TEMPLATE % (column, reference, col) for col in reference_columns]
+    return names
 
 @dataclass
-class EoSPriorSet:
+class BaseEoSPriorSet:
     """
     This class encapsulates the current way we store samples from
     an EoS Process.  It's currently agnostic to the sampling method,
     e.g. parametric, nonparametric, whatever, but it prefers the 
     standard hierarchical directory structure we use to store these
     draws
+
+    This base class only knows where the draws live.  Use EoSPriorSet to
+    extract properties with universality, or NativeEoSPriorSet to extract
+    them without it.
     """
     eos_dir : str
     eos_column : str
@@ -58,9 +77,9 @@ class EoSPriorSet:
         "start_baryon_density", "end_baryon_density")
 
     
-    @staticmethod
-    def get_default():
-        return EoSPriorSet(eos_dir=DEFAULT_EOS_DATA["eos_dir"],
+    @classmethod
+    def get_default(cls):
+        return cls(eos_dir=DEFAULT_EOS_DATA["eos_dir"],
                            eos_column=DEFAULT_EOS_DATA["eos_column"],
                            eos_per_dir=DEFAULT_EOS_DATA["eos_per_dir"],
                            macro_dir=DEFAULT_EOS_DATA["eos_dir"]
@@ -94,16 +113,40 @@ class EoSPriorSet:
         return os.path.join(eos_dir,
                             f"DRAWmod{self.eos_per_dir}-%(moddraw)06d", 
                             base)
-    
+
+    def get_eos(self, eos_index):
+        """The EoS table for draw `eos_index`, as a DataFrame."""
+        return pd.read_csv(self.get_eos_path(int(eos_index)))
+
+    def get_macro(self, eos_index):
+        """The macroscopic (e.g. M, R, Lambda) table for draw `eos_index`, as a DataFrame."""
+        return pd.read_csv(self.get_macro_path(int(eos_index)))
+
+
+@dataclass
+class EoSPriorSet(BaseEoSPriorSet):
+    """
+    EoS prior set that extracts properties with universality's
+    properties.samples.process2samples, reading stable branches from
+    precomputed branches files (`branches_data`).  Requires universality.
+    """
     def get_property(self, eos_indices,
                      dependent_variables=["R"],
                      extraction=Extraction("interpolation", True, "M",  [1.6, 1.8]), **kwargs):
+        """
+        Extract `dependent_variables` for each EoS in `eos_indices`, as
+        described by `extraction`.  Extra kwargs are passed through to
+        universality's process2samples (e.g. selection_rule, default_values).
+
+        Returns a DataFrame with one row per EoS and columns named by
+        `output_columns`.
+        """
         if extraction.strategy == "extremize":
             # call to process2extrema
             
             return eos_indices
         elif extraction.strategy == "interpolation":
-            # call process2samples
+            from universality.properties import samples
             if extraction.dynamic is not None:
                 dynamic_kwargs = {"dynamic_x_test" : np.array(extraction.dynamic)}
             else:
@@ -112,7 +155,7 @@ class EoSPriorSet:
                 branches_kwargs = {"branches_mapping":self.branches_data}
             else:
                 branches_kwargs = {}
-            print("path tempalte is", self.get_path_template(macro=extraction.macro))
+            print("path template is", self.get_path_template(macro=extraction.macro))
             data = samples.process2samples(
                 np.array(eos_indices),
                 self.get_path_template(macro=extraction.macro),
@@ -124,15 +167,16 @@ class EoSPriorSet:
                 **branches_kwargs,
                 **kwargs)
             ref_columns = extraction.dynamic.columns if extraction.dynamic is not None else []
-            columns=samples.outputcolumns(dependent_variables,
-                                          extraction.independent_variable,
-                                          reference_values=[] if extraction.values is None else extraction.values,
-                                          reference_columns=ref_columns)
+            columns = output_columns(dependent_variables,
+                                     extraction.independent_variable,
+                                     reference_values=[] if extraction.values is None else extraction.values,
+                                     reference_columns=ref_columns)
             return pd.DataFrame(data, columns=columns)
         else:
             raise ValueError(f"Unknown extraction strategy, {extraction.strategy},"
-                             "try one of {_known_extraction_strategies}")
-        
+                             f"try one of {_known_extraction_strategies}")
+
+
 @dataclass
 class EoSPriorDistribution:
     """
@@ -194,8 +238,244 @@ class EoSPriorDistribution:
             # Assume this is just the an array of n dependent samples
             return self.eos_sampler.log_prob(samples)
 
-        
-class EoSPriorH5:
+    # -----------------------------------------------------------------
+    # Per-EoS property extraction, shared by every prior that can look up
+    # its draws by index (NativeEoSPriorSet, EoSPriorH5).  Subclasses
+    # provide get_eos and get_macro; everything else is common.
+    # -----------------------------------------------------------------
+    def get_eos(self, eos_index):
+        """The EoS table for draw `eos_index` (DataFrame-like)."""
+        raise NotImplementedError
+
+    def get_macro(self, eos_index):
+        """The macroscopic (e.g. M, R, Lambda) table for draw `eos_index` (DataFrame-like)."""
+        raise NotImplementedError
+
+    def get_property(self, eos_indices,
+                     dependent_variables=["R"],
+                     extraction=Extraction("interpolation", True, "M",  [1.6, 1.8]), **kwargs):
+        """
+        Extract `dependent_variables` for each EoS in `eos_indices`, as
+        described by `extraction`.  Extra kwargs are passed through to
+        `get_property_per_eos`.
+
+        Returns a DataFrame with one row per EoS and columns named by
+        `output_columns`, the same layout as EoSPriorSet.get_property.
+        """
+        if extraction.strategy == "extremize":
+            # call to process2extrema
+            
+            return eos_indices
+        elif extraction.strategy != "interpolation":
+            raise ValueError(f"Unknown extraction strategy, {extraction.strategy},"
+                             f"try one of {_known_extraction_strategies}")
+        static_x_test = [] if extraction.values is None else list(extraction.values)
+        if extraction.dynamic is not None:
+            dynamic_x_test = np.array(extraction.dynamic)
+            ref_columns = extraction.dynamic.columns
+        else:
+            dynamic_x_test = None
+            ref_columns = []
+        if not static_x_test and dynamic_x_test is None:
+            raise ValueError("extraction must specify `values` or `dynamic`")
+        data = np.array([
+            self.get_property_per_eos(
+                eos_index, dependent_variables, extraction,
+                static_x_test + ([] if dynamic_x_test is None else list(dynamic_x_test[i])),
+                **kwargs)
+            for i, eos_index in enumerate(eos_indices)])
+        columns = output_columns(dependent_variables,
+                                 extraction.independent_variable,
+                                 reference_values=static_x_test,
+                                 reference_columns=ref_columns)
+        return pd.DataFrame(data.reshape(-1, len(columns)), columns=columns)
+
+    def get_property_per_eos(self, eos_index, dependent_variables, extraction, x_test,
+                             selection_rule=None, default_values=None, rng=None,
+                             mass_column="M"):
+        """
+        Read `dependent_variables` off one EoS at the values `x_test` of
+        `extraction.independent_variable`.
+
+        eos_index: the draw to use; its table comes from get_macro if
+          extraction.macro, else get_eos
+        dependent_variables: list of column names to extract
+        extraction: the Extraction being performed.  If extraction.branched
+          and extraction.macro, the table is split into stable branches on
+          the fly (see find_stable_branches); otherwise the whole table is
+          one branch.
+        x_test: list of x values for this EoS (static values, then this
+          EoS's dynamic values)
+        selection_rule: how to choose when an x value lies on several
+          branches; defaults to extraction.selection_rule.  One of
+            "random": a branch chosen uniformly, independently for each x
+            "min"/"max": smallest/largest value (one dependent variable only)
+            "nearest_neighbor": the tabulated row whose x is closest, over
+              all branches (no interpolation; default_values only if there
+              are no stable points at all)
+        default_values: one value per dependent variable, used where an x
+          value is on no branch; defaults to NaN
+        rng: numpy Generator for the "random" rule
+        mass_column: the column whose turning points delimit stable branches
+
+        Returns a 1D array of length len(dependent_variables) * len(x_test),
+        ordered as output_columns: for each dependent variable, each x.
+        """
+        table = self.get_macro(eos_index) if extraction.macro else self.get_eos(eos_index)
+        table = pd.DataFrame(np.asarray(table)) if not isinstance(table, pd.DataFrame) else table
+        selection_rule = extraction.selection_rule if selection_rule is None else selection_rule
+        if selection_rule not in _known_selection_rules:
+            raise ValueError(f"selection_rule={selection_rule!r} not understood, "
+                             f"try one of {_known_selection_rules}")
+        if selection_rule in ("min", "max") and len(dependent_variables) != 1:
+            raise ValueError(f'selection_rule="{selection_rule}" needs exactly one dependent variable')
+        if default_values is None:
+            default_values = [np.nan] * len(dependent_variables)
+        if len(default_values) != len(dependent_variables):
+            raise ValueError("need exactly one default value per dependent variable")
+
+        x = np.asarray(table[extraction.independent_variable], dtype=float)
+        y = np.asarray(table[list(dependent_variables)], dtype=float)  # (Nrows, Ny)
+        if extraction.branched and extraction.macro:
+            branches = find_stable_branches(np.asarray(table[mass_column], dtype=float))
+        else:
+            branches = [np.ones(len(x), dtype=bool)]
+
+        if selection_rule == "nearest_neighbor":
+            rows = np.flatnonzero(np.logical_or.reduce(branches)) if branches else []
+            if len(rows) == 0:
+                return np.repeat(default_values, len(x_test)).astype(float)
+            nearest = rows[np.argmin(np.abs(x[rows][None, :] - np.asarray(x_test)[:, None]), axis=1)]
+            return y[nearest].T.flatten()
+
+        # candidates[i] collects one (Ny,) value per branch covering x_test[i]
+        candidates = [[] for _ in x_test]
+        for branch in branches:
+            values = _interpolate_on_branch(x[branch], y[branch], x_test)
+            for i, value in enumerate(values):
+                if value is not None:
+                    candidates[i].append(value)
+
+        rng = np.random.default_rng() if rng is None else rng
+        chosen = np.empty((len(x_test), len(dependent_variables)))
+        for i, values in enumerate(candidates):
+            if not values:
+                chosen[i] = default_values
+            elif selection_rule == "random":
+                chosen[i] = values[rng.integers(len(values))]
+            elif selection_rule == "min":
+                chosen[i] = np.min(values, axis=0)
+            else:
+                chosen[i] = np.max(values, axis=0)
+        return chosen.T.flatten()
+
+
+    def get_quantiles(self, eos_indices, xcolumn, ycolumn, x_test, quantiles,
+                      weights=None, macro=False, branched=None,
+                      selection_rule="random", default_value=None, rng=None,
+                      quantile_type="sym"):
+        """
+        Weighted quantiles of `ycolumn` across the EoSs `eos_indices`, at
+        each value in `x_test` of `xcolumn`.  Mirrors universality's
+        properties.samples.process2quantiles.
+
+        weights: (N,) weight of each EoS, default uniform
+        macro: read the macroscopic tables (get_macro) rather than get_eos
+        branched: select stable branches on the fly; defaults to `macro`
+        selection_rule, rng: as in get_property_per_eos
+        default_value: value used where an x is on no branch of an EoS; the
+          default (None) excludes that EoS from the quantiles at that x, and
+          x values no EoS reaches get NaN quantiles
+
+        Returns (quantiles, median): arrays of shape (len(quantiles),
+        len(x_test)) and (len(x_test),).
+        """
+        if quantile_type != "sym":
+            raise NotImplementedError(f'quantile_type="{quantile_type}" is not supported, only "sym"')
+        from temperance.core.weights import quantile
+        x_test = list(x_test)
+        extraction = Extraction("interpolation", macro, xcolumn, x_test,
+                                branched=macro if branched is None else branched,
+                                selection_rule=selection_rule)
+        samples = self.get_property(
+            eos_indices, [ycolumn], extraction, rng=rng,
+            default_values=[np.nan if default_value is None else default_value]).to_numpy()
+        weights = (np.full(len(samples), 1.0 / len(samples)) if weights is None
+                   else np.asarray(weights, dtype=float))
+
+        qs = np.empty((len(quantiles), len(x_test)))
+        median = np.empty(len(x_test))
+        for i in range(len(x_test)):
+            y = samples[:, i]
+            keep = ~np.isnan(y)
+            if not keep.any():  # no EoS reaches this x
+                qs[:, i] = median[i] = np.nan
+                continue
+            qs[:, i] = quantile(y[keep], quantiles, weights=weights[keep])
+            median[i] = quantile(y[keep], [0.5], weights=weights[keep])[0]
+        return qs, median
+
+def find_stable_branches(mass):
+    """
+    Boolean masks (in table order) for each stable branch of a sequence of
+    stars ordered by central density: maximal runs where the mass does not
+    decrease.  A point is on a stable branch if the mass did not decrease
+    to reach it (the first point follows the first step), matching
+    sampling.branched_interpolator.get_branches.
+    """
+    mass = np.asarray(mass, dtype=float)
+    if len(mass) < 2:
+        return [np.ones(len(mass), dtype=bool)]
+    steps = np.diff(mass) >= 0
+    stable = np.concatenate([[steps[0]], steps])
+    # label each run of consecutive stable points
+    starts = np.flatnonzero(stable & ~np.concatenate([[False], stable[:-1]]))
+    stops = np.flatnonzero(stable & ~np.concatenate([stable[1:], [False]]))
+    branches = []
+    for start, stop in zip(starts, stops):
+        branch = np.zeros(len(mass), dtype=bool)
+        branch[start:stop + 1] = True
+        branches.append(branch)
+    return branches
+
+
+def _interpolate_on_branch(x, y, x_test):
+    """
+    y (Nrows, Ny) linearly interpolated at each x_test along one branch, or
+    None where x_test is outside the branch's range.  x must be monotonic
+    on the branch unless every requested value is an exact match.
+    """
+    out = [None] * len(x_test)
+    if len(x) == 0:
+        return out
+    order = np.argsort(x, kind="stable")
+    monotonic = np.all(np.diff(x) >= 0) or np.all(np.diff(x) <= 0)
+    for i, X in enumerate(x_test):
+        if not (x[order[0]] <= X <= x[order[-1]]):
+            continue
+        exact = np.flatnonzero(x == X)
+        if len(exact) == 1:
+            out[i] = y[exact[0]]
+        elif monotonic:
+            out[i] = np.array([np.interp(X, x[order], y[order, j]) for j in range(y.shape[1])])
+        else:
+            raise RuntimeError(
+                f"{X} is not an exact tabulated value and x is not monotonic on this "
+                "branch, so it cannot be interpolated; use a branched extraction or "
+                'selection_rule="nearest_neighbor"')
+    return out
+
+
+@dataclass
+class NativeEoSPriorSet(BaseEoSPriorSet, EoSPriorDistribution):
+    """
+    EoS prior set that extracts properties without universality, using the
+    per-EoS extraction shared with EoSPriorH5 (EoSPriorDistribution).
+    BaseEoSPriorSet supplies get_eos and get_macro from the draw directories.
+    """
+
+
+class EoSPriorH5(EoSPriorDistribution):
     def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns", index_to_key=lambda x : str(x)):
         self.h5_path = str(h5_path)
         self.h5_path = h5_path        

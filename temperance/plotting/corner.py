@@ -3,8 +3,6 @@ import pandas as pd
 from dataclasses import dataclass 
 from itertools import chain
 
-import universality as unvs
-import universality.plot as uplot
 
 import matplotlib
 from matplotlib.lines import Line2D
@@ -205,6 +203,7 @@ def corner_samples(plottable_samples, use_universality=False,
     ranges = [column.plot_range for column in columns_to_plot]
     column_labels= [column.label for column in columns_to_plot]
     if use_universality:
+        import universality.plot as uplot
         lines = [] # hack for getting legend in a controlled  way
         for samples in plottable_samples:
             # legend getting hack (0,1  and  0,1 don't mean anything)
@@ -267,6 +266,7 @@ def corner_eos(plottable_samples,  use_universality=True,
     
     
     if use_universality:
+        import universality.plot as uplot
         lines = [] # hack for getting legend in a controlled  way
         for samples in plottable_samples:
 

@@ -874,7 +874,6 @@ class RelativisticModes:
 
         where  e^{2 lam} = 1/(1 - 2m/r),  e^{2 nu} = -g_tt.
 
-        TODO: Implement equations
         """
         # Get background quantities
         e = float(self._e_i(r))
