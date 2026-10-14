@@ -6,6 +6,8 @@ import pandas as pd
 import scipy.interpolate as interpolate
 import matplotlib.pyplot as plt
 
+from .stability import stable_mask
+
 def array_in(data, target_range):
     """
     return an array of shape `data.shape` which 
@@ -33,10 +35,9 @@ def get_branches(eos, properties = ["R", "Lambda", "I"]):
     def segments(split_eos):
         segment_diff = split_eos.index - np.arange(split_eos.shape[0])
         return segment_diff
-    # The first point is stable if the first difference is stable
-    initially_stable = (np.diff(eos["M"]) >= 0)[0]
-    stable = eos.loc[[initially_stable, *(np.diff(eos["M"]) >= 0)], :].copy(deep=True)
-    unstable = eos.loc[[not (initially_stable), *(np.diff(eos["M"]) < 0)], :].copy(deep=True)
+    # stable stars by the turning-point rule (see sampling.stability)
+    stable_rows = stable_mask(eos["M"], eos["R"] if "R" in eos else None)
+    stable = eos.loc[stable_rows, :].copy(deep=True)
     stable["branch_id"] = segments(stable)
     branch_ids = np.unique(np.array(segments(stable)))
     branches = []
