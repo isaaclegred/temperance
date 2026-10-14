@@ -160,8 +160,8 @@ def test_prior_set_get_eos_and_get_macro(eos_dir, cls):
 def test_h5_get_eos_and_get_macro_match_prior_set(eos_dir, eos_h5):
     native = make_prior_set(EoSPriorSet, eos_dir)
     for draw in range(NUM_EOS):
-        pd.testing.assert_frame_equal(pd.DataFrame(eos_h5.get_macro(draw)[()]), native.get_macro(draw))
-        pd.testing.assert_frame_equal(pd.DataFrame(eos_h5.get_eos(draw)[()]), native.get_eos(draw))
+        pd.testing.assert_frame_equal(eos_h5.get_macro(draw), native.get_macro(draw))
+        pd.testing.assert_frame_equal(eos_h5.get_eos(draw), native.get_eos(draw))
 
 
 def with_fake_per_eos(cls):
