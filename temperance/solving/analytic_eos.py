@@ -17,6 +17,7 @@ Every EOS class provides the following callables (all accept array arguments):
     e_of_logenthalpy(lnh)     -> total energy density
     cs2_of_logenthalpy(lnh)   -> adiabatic sound speed squared  dp/de|_s
     logenthalpy_of_rho(rho)   -> inverse: log-enthalpy from baryon density
+    logenthalpy_of_p(p)       -> inverse: log-enthalpy from pressure
     p_of_rho(rho)             -> pressure from baryon density
     e_of_rho(rho)             -> energy density from baryon density
 
@@ -35,6 +36,7 @@ import numpy as np
 import scipy
 import scipy.integrate
 import scipy.interpolate
+import scipy.optimize
 
 try:
     from ..utilities.units import CGS_DENSITY_TO_GEOM
@@ -68,7 +70,8 @@ try:
 except ImportError:
     xp = np
     from scipy.interpolate import interp1d as spinterp1d
-    interp1d = lambda x, y, method, **kwargs: spinterp1d(x[0], y, **kwargs)
+    # match the JAX RegularGridInterpolator call signature: points as a 1-tuple
+    interp1d = lambda x, y, method, **kwargs: spinterp1d(x[0], y, kind=method, **kwargs)
     ode_solver = scipy.integrate.odeint
 
     def print_val(statement, **kwargs):
@@ -132,6 +135,8 @@ class polytropic_eos:
         )
         self.p_of_rho = lambda rho: self.K * rho ** self.Gamma
         self.e_of_rho = lambda rho: rho + self.p_of_rho(rho) / (self.Gamma - 1.0)
+        self.logenthalpy_of_p = lambda p: self.logenthalpy_of_rho(
+            (p / self.K) ** (1.0 / self.Gamma))
 
 class energy_density_polytrope:
     """
@@ -212,12 +217,25 @@ class energy_density_polytrope:
         self.p_of_e   = lambda e: K * e ** Gamma
         self.e_of_p   = lambda p: (p / K) ** (1.0 / Gamma)
         self.lnh_of_e = lambda e: Gamma / (Gamma - 1.0) * xp.log(1.0 + K * e ** (Gamma - 1.0))
+        self.logenthalpy_of_p = lambda p: self.lnh_of_e(self.e_of_p(p))
 class css_eos:
     """
     Constant-speed-of-sound EOS above a transition energy density e0.
 
     Below e0 the matter is pressure-free (p = 0, modelling a low-density
-    crust); above e0 the pressure is linear in energy density with slope cs2.
+    crust, with rho = e); above e0 the pressure is linear in energy density
+    with slope cs2.
+
+    With X = ((1 + cs2) e - cs2 e0) / e0, the first law d ln rho = de / (e + p)
+    and continuity at e0 give the closed forms
+
+        p     = cs2 (e - e0)
+        rho   = e0 X^(1 / (1 + cs2))
+        lnh   = cs2 / (1 + cs2) ln X          (h = (e + p) / rho)
+        e     = [e0 exp((1 + cs2) lnh / cs2) + cs2 e0] / (1 + cs2)
+        rho   = e0 exp(lnh / cs2)
+
+    so lnh = 0 and rho = e at e = e0.
 
     Parameters
     ----------
@@ -230,31 +248,28 @@ class css_eos:
     def __init__(self, cs2, e0):
         self.cs2 = cs2
         self.e0 = e0
-        prefactor = e0 * (e0 / (1 + cs2)) ** (-1.0 / (1 + cs2))
 
-        self.p_of_e = lambda e: xp.where(e < self.e0, 0, self.cs2 * (e - self.e0))
+        def X_of_e(e):
+            return ((1.0 + cs2) * e - cs2 * e0) / e0
+
+        self.p_of_e = lambda e: xp.where(e < e0, 0.0, cs2 * (e - e0))
         self.rho_of_e = lambda e: xp.where(
-            e < self.e0,
-            e,
-            (e - self.e0 * self.cs2) ** (1.0 / (1 + self.cs2)) * prefactor,
-        )
+            e < e0, e, e0 * xp.abs(X_of_e(e)) ** (1.0 / (1.0 + cs2)))
         self.enthalpy_of_e = lambda e: (e + self.p_of_e(e)) / self.rho_of_e(e)
         self.e_of_rho = lambda rho: xp.where(
-            rho < self.e0,
-            rho,
-            (rho / prefactor) ** (1 + self.cs2) / (1 + self.cs2) + self.e0 * self.cs2,
-        )
+            rho < e0, rho, e0 * ((rho / e0) ** (1.0 + cs2) + cs2) / (1.0 + cs2))
         self.e_of_logenthalpy = lambda lnh: (
-            e0 * (1 + 2 * self.cs2) * xp.exp((1 + self.cs2 / self.cs2) * lnh) / (1 + self.cs2)
+            e0 * (xp.exp((1.0 + cs2) * lnh / cs2) + cs2) / (1.0 + cs2)
         )
         self.p_of_logenthalpy = lambda lnh: self.p_of_e(self.e_of_logenthalpy(lnh))
-        self.rho_of_logenthalpy = lambda lnh: self.rho_of_e(self.e_of_logenthalpy(lnh))
-        self.cs2_of_logenthalpy = lambda lnh: xp.full_like(lnh, self.cs2)
-        self.logenthalpy_of_rho = lambda rho: xp.log(
-            self.enthalpy_of_e(self.e_of_rho(rho))
-        )
+        self.rho_of_logenthalpy = lambda lnh: e0 * xp.exp(lnh / cs2)
+        self.cs2_of_logenthalpy = lambda lnh: xp.full_like(xp.asarray(lnh, dtype=float), cs2)
+        self.logenthalpy_of_rho = lambda rho: xp.where(
+            rho < e0, 0.0, cs2 * xp.log(xp.maximum(rho, e0) / e0))
         self.p_of_rho = lambda rho: self.p_of_e(self.e_of_rho(rho))
-        self.e_of_rho = self.e_of_rho
+        # e = e0 + p / cs2, so X = 1 + (1 + cs2) p / (cs2 e0)
+        self.logenthalpy_of_p = lambda p: cs2 / (1.0 + cs2) * xp.log(
+            1.0 + (1.0 + cs2) * p / (cs2 * e0))
 
 
 class interpolated_eos:
@@ -262,8 +277,14 @@ class interpolated_eos:
     Tabulated EOS read from a DataFrame and interpolated with splines.
 
     The log-enthalpy grid is constructed by numerically integrating
-    dp / (e + p) over the tabulated pressure column.  The sound speed is
-    derived as d(lnh) / d(ln rho) via numerical differentiation.
+    dp / (e + p) over the tabulated pressure column, starting from lnh = 0 at
+    the lowest tabulated pressure.  The sound speed is taken from the
+    ``cs2_column`` column when the table has one (e.g. ``cs2c2`` in the
+    Zenodo EOS sets), and otherwise derived as d(lnh) / d(ln rho) by
+    numerical differentiation.
+
+    Attributes ``p_max``, ``e_max``, ``rho_max`` and ``lnh_max`` give the
+    top of the table (geometric units).
 
     Parameters
     ----------
@@ -277,10 +298,17 @@ class interpolated_eos:
         Default (CGS_DENSITY_TO_GEOM) converts g/cm^3 at nuclear saturation
         (~2.8e14) to ~0.00045.
     method : str
-        Interpolation scheme passed to the backend (``"cubic"`` by default).
+        Interpolation scheme passed to the backend, e.g. ``"linear"`` (the
+        default) or ``"cubic"``.  Before this was honoured every table was
+        interpolated linearly whatever was passed, so ``"linear"`` reproduces
+        earlier results.
+    cs2_column : str or None
+        Column holding the sound speed squared (dimensionless), used when
+        present.  None always uses the finite-difference estimate.
     """
 
-    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="cubic"):
+    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="linear",
+                 cs2_column="cs2c2"):
         self.eos = eos
         logenthalpy = xp.array(
             scipy.integrate.cumulative_trapezoid(
@@ -292,7 +320,15 @@ class interpolated_eos:
         baryon_density = xp.array(eos["baryon_density"]) * conversion_factor
         pressurec2 = xp.array(eos["pressurec2"]) * conversion_factor
         energy_densityc2 = xp.array(eos["energy_densityc2"]) * conversion_factor
-        cs2 = xp.array(np.gradient(logenthalpy, np.log(baryon_density)))
+        if cs2_column is not None and cs2_column in eos:
+            cs2 = xp.array(eos[cs2_column], dtype=float)
+        else:
+            cs2 = xp.array(np.gradient(logenthalpy, np.log(baryon_density)))
+
+        self.p_max = float(pressurec2[-1])
+        self.e_max = float(energy_densityc2[-1])
+        self.rho_max = float(baryon_density[-1])
+        self.lnh_max = float(logenthalpy[-1])
 
         self.cs2_of_logenthalpy = interp1d((logenthalpy,), cs2, method=method)
         self.rho_of_logenthalpy = interp1d((logenthalpy,), baryon_density, method=method)
@@ -301,11 +337,46 @@ class interpolated_eos:
         self.p_of_logenthalpy = interp1d((logenthalpy,), pressurec2, method=method)
         self.e_of_logenthalpy = interp1d((logenthalpy,), energy_densityc2, method=method)
         self.logenthalpy_of_rho = interp1d((baryon_density,), logenthalpy, method=method)
+        self.logenthalpy_of_p = interp1d((pressurec2,), logenthalpy, method=method)
+
+
+class _PiecewiseInterpolator:
+    """
+    Interpolate a function that is smooth on each of several consecutive
+    x-intervals but may jump (or kink) between them.
+
+    ``pieces`` is a list of (x, y) arrays, each with increasing x, in order of
+    increasing x; consecutive pieces may share an endpoint.  At a shared
+    endpoint the later (higher-x) piece is used.  With a single piece this is
+    exactly scipy.interpolate.interp1d.
+    """
+
+    def __init__(self, pieces, kind="cubic"):
+        self.edges = np.array([x[0] for x, _ in pieces[1:]], dtype=float)
+        self.functions = [
+            scipy.interpolate.interp1d(x, y, kind=kind if len(x) > 3 else "linear",
+                                       bounds_error=False, fill_value="extrapolate")
+            for x, y in pieces
+        ]
+
+    def __call__(self, x):
+        if len(self.functions) == 1:
+            return self.functions[0](x)
+        x = np.asarray(x, dtype=float)
+        flat = np.atleast_1d(x).ravel()
+        piece = np.searchsorted(self.edges, flat, side="right")
+        out = np.empty_like(flat)
+        for k, function in enumerate(self.functions):
+            selected = piece == k
+            if selected.any():
+                out[selected] = function(flat[selected])
+        return out.reshape(x.shape)
 
 
 class piecewise_eos:
     """
-    Piecewise EoS assembled from energy_density_polytrope and CSS segments.
+    Piecewise EoS assembled from polytropic, constant-speed-of-sound and
+    first-order-transition segments.
 
     Segments are joined with pressure continuity enforced at each boundary.
     The cumulative log-enthalpy is tracked analytically across segments.
@@ -314,9 +385,9 @@ class piecewise_eos:
     Parameters
     ----------
     segments : list of dict
-        Each dict describes one segment.  Two types are supported:
+        Each dict describes one segment.  Supported types:
 
-        Polytropic segment::
+        Energy-density polytrope, p = K e^Gamma::
 
             {"type": "polytrope", "Gamma": float, "e_max": float}
             {"type": "polytrope", "Gamma": float, "K": float, "e_max": float}
@@ -324,6 +395,17 @@ class piecewise_eos:
         K is inferred from pressure continuity at the lower boundary for all
         segments after the first; it must be given explicitly for the first.
         An optional ``"Gamma1"`` key overrides the dynamical adiabatic index.
+
+        Rest-mass polytrope, p = K rho^Gamma, e = (1 + a) rho + p / (Gamma - 1)::
+
+            {"type": "rest_mass_polytrope", "Gamma": float, "K": float, "rho_max": float}
+            {"type": "rest_mass_polytrope", "Gamma": float, "e_max": float}
+
+        The usual piecewise-polytrope segment (Read et al. 2009).  As the
+        first segment K is required and a = 0; later segments get K and a
+        from continuity of p and e.  The upper boundary is given by
+        ``"rho_max"`` or ``"e_max"``.  An optional ``"Gamma1"`` overrides
+        the dynamical adiabatic index.
 
         CSS segment::
 
@@ -333,8 +415,29 @@ class piecewise_eos:
         from the previous segment's upper boundary.  CSS segments must not
         be the first segment (p=0 at e=0 would produce a singular lnh).
 
+        First-order phase transition (latent-heat jump)::
+
+            {"type": "jump", "delta_e": float}
+
+        At the current pressure p_t the energy density jumps from e_t to
+        e_t + delta_e (a Maxwell construction).  The pressure and
+        log-enthalpy are continuous; the baryon density jumps by
+        (e_t + delta_e + p_t) / (e_t + p_t).  Must not be first or last.
+
     n_table : int
         Number of grid points per segment used when building the table.
+
+    Notes
+    -----
+    Each segment is interpolated with its own cubic spline, so the kinks
+    between segments are not smoothed over.  Functions of lnh (e, rho, cs2)
+    are discontinuous at a jump, since lnh is constant across it; at exactly
+    the transition lnh they return the high-density limit.  The
+    transitions are listed in ``jumps``, each a dict with keys ``lnh``,
+    ``p``, ``e_below``, ``e_above``, ``rho_below`` and ``rho_above``.
+    Functions of rho are continuous: inside the coexistence interval p and
+    lnh are constant and e is linear in rho.  TOV integration in lnh is
+    unaffected because p and lnh are continuous.
 
     Examples
     --------
@@ -343,84 +446,162 @@ class piecewise_eos:
     ...     {"type": "polytrope", "Gamma": 2.5,              "e_max": 5e-4},
     ...     {"type": "css",       "cs2":  0.6,               "e_max": 2e-3},
     ... ])
+
+    A hadronic polytrope, a latent-heat jump and a causal core::
+
+    >>> eos = piecewise_eos([
+    ...     {"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": 9e-4},
+    ...     {"type": "jump", "delta_e": 1e-3},
+    ...     {"type": "css", "cs2": 1.0, "e_max": 2e-2},
+    ... ])
     """
 
     def __init__(self, segments, n_table=500):
         if not segments:
             raise ValueError("segments must be non-empty.")
         first = segments[0]
-        if first["type"] == "polytrope" and "K" not in first:
+        if first["type"] in ("polytrope", "rest_mass_polytrope") and "K" not in first:
             raise ValueError("The first polytropic segment must specify K.")
         if first["type"] == "css":
             raise ValueError("The first segment cannot be CSS (lnh diverges at e=0 with p=0).")
+        if first["type"] == "jump" or segments[-1]["type"] == "jump":
+            raise ValueError("A jump segment cannot be the first or last segment.")
 
-        e_pieces   = []
-        p_pieces   = []
-        lnh_pieces = []
-        cs2_pieces = []
+        # One table piece per (non-jump) segment, each including its lower
+        # boundary, so that every segment gets its own spline and kinks or
+        # jumps between segments are not smoothed over.  Each piece is a
+        # dict of arrays e, p, lnh, cs2 (rho follows from the others).
+        pieces = []
+        jump_before = []   # the jump (dict) preceding each piece, or None
+        self.jumps = []
 
         e_lo   = 0.0
         p_lo   = 0.0
         lnh_lo = 0.0
+        pending_jump = None
 
         for i, seg in enumerate(segments):
-            e_hi    = seg["e_max"]
-            # First segment avoids e=0; subsequent segments skip the shared
-            # lower boundary (already the last point of the previous segment).
-            e_start = e_hi * 1e-8 if e_lo == 0.0 else e_lo
-            e_grid  = np.linspace(e_start, e_hi, n_table + 1)[1:] if i > 0 else np.linspace(e_start, e_hi, n_table)
+            if seg["type"] == "jump":
+                if seg["delta_e"] <= 0:
+                    raise ValueError("delta_e must be positive.")
+                if pending_jump is not None:
+                    raise ValueError("Two consecutive jump segments; combine them into one.")
+                e_hi = e_lo + seg["delta_e"]
+                rho_below = (e_lo + p_lo) / np.exp(lnh_lo)
+                pending_jump = {"lnh": lnh_lo, "p": p_lo, "e_below": e_lo, "e_above": e_hi,
+                                "rho_below": rho_below,
+                                "rho_above": rho_below * (e_hi + p_lo) / (e_lo + p_lo)}
+                self.jumps.append(pending_jump)
+                e_lo = e_hi
+                continue
 
-            if seg["type"] == "polytrope":
-                Gamma  = seg["Gamma"]
-                Gamma1 = seg.get("Gamma1", Gamma)
-                K      = seg["K"] if i == 0 else p_lo / e_lo ** Gamma
-
-                p_grid = K * e_grid ** Gamma
-
-                # lnh = lnh_lo + Gamma/(Gamma-1) * ln((1 + K*e^(Gamma-1)) / ref)
-                # ref = 1 + K*e_lo^(Gamma-1);  at e_lo=0 this is 1.
-                ref      = 1.0 + K * e_lo ** (Gamma - 1.0) if e_lo > 0.0 else 1.0
-                lnh_grid = lnh_lo + Gamma / (Gamma - 1.0) * np.log(
-                    (1.0 + K * e_grid ** (Gamma - 1.0)) / ref
-                )
-                cs2_grid = Gamma1 * p_grid / (e_grid + p_grid)
-
-            elif seg["type"] == "css":
-                cs2_val  = seg["cs2"]
-                p_grid   = p_lo + cs2_val * (e_grid - e_lo)
-
-                # integral_{e_lo}^{e} dp/(e'+p') = cs2/(1+cs2) * ln((e+p(e)) / (e_lo+p_lo))
-                lnh_grid = lnh_lo + cs2_val / (1.0 + cs2_val) * np.log(
-                    (e_grid + p_grid) / (e_lo + p_lo)
-                )
-                cs2_grid = np.full(n_table, cs2_val)
-
+            if seg["type"] == "rest_mass_polytrope":
+                e_grid, p_grid, lnh_grid, cs2_grid = self._rest_mass_polytrope(
+                    seg, i, e_lo, p_lo, lnh_lo, n_table)
             else:
-                raise ValueError(f"Unknown segment type '{seg['type']}'.")
+                e_hi    = seg["e_max"]
+                # The first segment avoids e=0; later ones start at (and
+                # include) the previous segment's upper boundary.
+                if i == 0:
+                    e_grid = np.linspace(e_hi * 1e-8, e_hi, n_table)
+                else:
+                    e_grid = np.linspace(e_lo, e_hi, n_table + 1)
 
-            e_pieces.append(e_grid)
-            p_pieces.append(p_grid)
-            lnh_pieces.append(lnh_grid)
-            cs2_pieces.append(cs2_grid)
+                if seg["type"] == "polytrope":
+                    Gamma  = seg["Gamma"]
+                    Gamma1 = seg.get("Gamma1", Gamma)
+                    K      = seg["K"] if i == 0 else p_lo / e_lo ** Gamma
 
-            e_lo   = e_hi
+                    p_grid = K * e_grid ** Gamma
+
+                    # lnh = lnh_lo + Gamma/(Gamma-1) * ln((1 + K*e^(Gamma-1)) / ref)
+                    # ref = 1 + K*e_lo^(Gamma-1);  at e_lo=0 this is 1.
+                    ref      = 1.0 + K * e_lo ** (Gamma - 1.0) if e_lo > 0.0 else 1.0
+                    lnh_grid = lnh_lo + Gamma / (Gamma - 1.0) * np.log(
+                        (1.0 + K * e_grid ** (Gamma - 1.0)) / ref
+                    )
+                    cs2_grid = Gamma1 * p_grid / (e_grid + p_grid)
+
+                elif seg["type"] == "css":
+                    cs2_val  = seg["cs2"]
+                    p_grid   = p_lo + cs2_val * (e_grid - e_lo)
+
+                    # integral_{e_lo}^{e} dp/(e'+p') = cs2/(1+cs2) * ln((e+p(e)) / (e_lo+p_lo))
+                    lnh_grid = lnh_lo + cs2_val / (1.0 + cs2_val) * np.log(
+                        (e_grid + p_grid) / (e_lo + p_lo)
+                    )
+                    cs2_grid = np.full_like(e_grid, cs2_val)
+
+                else:
+                    raise ValueError(f"Unknown segment type '{seg['type']}'.")
+
+            piece = {"e": e_grid, "p": p_grid, "lnh": lnh_grid, "cs2": cs2_grid}
+            piece["rho"] = (e_grid + p_grid) / np.exp(lnh_grid)
+            pieces.append(piece)
+            jump_before.append(pending_jump)
+            pending_jump = None
+
+            e_lo   = float(e_grid[-1])
             p_lo   = float(p_grid[-1])
             lnh_lo = float(lnh_grid[-1])
 
-        e_arr   = np.concatenate(e_pieces)
-        p_arr   = np.concatenate(p_pieces)
-        lnh_arr = np.concatenate(lnh_pieces)
-        cs2_arr = np.concatenate(cs2_pieces)
-        rho_arr = (e_arr + p_arr) / np.exp(lnh_arr)
+        def by(x, y):
+            return _PiecewiseInterpolator([(piece[x], piece[y]) for piece in pieces])
 
-        kw = dict(kind="cubic", bounds_error=False, fill_value="extrapolate")
-        self.e_of_logenthalpy   = scipy.interpolate.interp1d(lnh_arr, e_arr,   **kw)
-        self.p_of_logenthalpy   = scipy.interpolate.interp1d(lnh_arr, p_arr,   **kw)
-        self.rho_of_logenthalpy = scipy.interpolate.interp1d(lnh_arr, rho_arr, **kw)
-        self.cs2_of_logenthalpy = scipy.interpolate.interp1d(lnh_arr, cs2_arr, **kw)
-        self.logenthalpy_of_rho = scipy.interpolate.interp1d(rho_arr, lnh_arr, **kw)
-        self.p_of_rho           = scipy.interpolate.interp1d(rho_arr, p_arr,   **kw)
-        self.e_of_rho           = scipy.interpolate.interp1d(rho_arr, e_arr,   **kw)
+        self.e_of_logenthalpy   = by("lnh", "e")
+        self.p_of_logenthalpy   = by("lnh", "p")
+        self.rho_of_logenthalpy = by("lnh", "rho")
+        self.cs2_of_logenthalpy = by("lnh", "cs2")
+        self.logenthalpy_of_p   = by("p", "lnh")
+
+        # Functions of rho also cover the coexistence interval of each jump,
+        # where p and lnh are constant and e = (e_below + p) rho / rho_below - p.
+        rho_pieces = {key: [] for key in ("lnh", "p", "e")}
+        for piece, jump in zip(pieces, jump_before):
+            if jump is not None:
+                rho = np.array([jump["rho_below"], jump["rho_above"]])
+                rho_pieces["lnh"].append((rho, np.full(2, jump["lnh"])))
+                rho_pieces["p"].append((rho, np.full(2, jump["p"])))
+                rho_pieces["e"].append((rho, np.array([jump["e_below"], jump["e_above"]])))
+            for key in rho_pieces:
+                rho_pieces[key].append((piece["rho"], piece[key]))
+        self.logenthalpy_of_rho = _PiecewiseInterpolator(rho_pieces["lnh"])
+        self.p_of_rho           = _PiecewiseInterpolator(rho_pieces["p"])
+        self.e_of_rho           = _PiecewiseInterpolator(rho_pieces["e"])
+
+    @staticmethod
+    def _rest_mass_polytrope(seg, i, e_lo, p_lo, lnh_lo, n_table):
+        """Grid for p = K rho^Gamma, e = (1 + a) rho + p / (Gamma - 1)."""
+        Gamma  = seg["Gamma"]
+        Gamma1 = seg.get("Gamma1", Gamma)
+        if i == 0:
+            K, a, rho_lo = seg["K"], 0.0, 0.0
+        else:
+            rho_lo = (e_lo + p_lo) / np.exp(lnh_lo)
+            K = p_lo / rho_lo ** Gamma
+            a = e_lo / rho_lo - 1.0 - K * rho_lo ** (Gamma - 1.0) / (Gamma - 1.0)
+
+        def e_of_rho(rho):
+            return (1.0 + a) * rho + K * rho ** Gamma / (Gamma - 1.0)
+
+        if "rho_max" in seg:
+            rho_hi = seg["rho_max"]
+        else:
+            upper = max(seg["e_max"], 2.0 * rho_lo)
+            while e_of_rho(upper) < seg["e_max"]:
+                upper *= 2.0
+            rho_hi = scipy.optimize.brentq(lambda rho: e_of_rho(rho) - seg["e_max"],
+                                           rho_lo, upper, xtol=1e-16, rtol=1e-14)
+        if i == 0:
+            rho_grid = np.geomspace(rho_hi * 1e-8, rho_hi, n_table)
+        else:
+            rho_grid = np.linspace(rho_lo, rho_hi, n_table + 1)
+        p_grid = K * rho_grid ** Gamma
+        e_grid = e_of_rho(rho_grid)
+        # h = (e + p) / rho = 1 + a + K Gamma rho^(Gamma-1) / (Gamma - 1)
+        lnh_grid = np.log(1.0 + a + K * Gamma * rho_grid ** (Gamma - 1.0) / (Gamma - 1.0))
+        cs2_grid = Gamma1 * p_grid / (e_grid + p_grid)
+        return e_grid, p_grid, lnh_grid, cs2_grid
 
 
 class analytic_composition_dependent_eos:
