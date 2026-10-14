@@ -482,18 +482,159 @@ NativeEoSPriorSet = EoSPriorSet
 
 
 class EoSPriorH5(EoSPriorDistribution):
-    def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns", index_to_key=lambda x : str(x)):
+    """
+    EoS draws stored in an HDF5 file, one dataset per draw in an EoS group
+    and a macro (stellar properties) group, e.g. the Zenodo 17352004 sets::
+
+        EoSPriorH5(path, "EoS", "Macro", index_to_key=lambda i: f"{i:05d}")
+
+    get_eos / get_macro return DataFrames.  The file is opened read-only;
+    use the object as a context manager, or call close(), to release it.
+
+    Parameters
+    ----------
+    h5_path : path
+    eos_subgroup_path, macro_subgroup_path : str
+        Groups holding the EoS and macro tables.
+    index_to_key : callable
+        Maps an EoS index to its dataset name.
+    key_to_index : callable
+        The inverse, used by indices(); default int.
+    """
+
+    def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns",
+                 index_to_key=lambda x : str(x), key_to_index=int):
         self.h5_path = str(h5_path)
         self.h5_file = h5py.File(self.h5_path, mode="r")
         self.eos_subgroup = self.h5_file[eos_subgroup_path]
         self.macro_subgroup = self.h5_file[macro_subgroup_path]
         self.index_to_key = index_to_key
+        self.key_to_index = key_to_index
+
+    @staticmethod
+    def _as_frame(dataset):
+        return pd.DataFrame(dataset[()])
+
     def get_eos(self, eos_index):
-        return self.eos_subgroup[self.index_to_key(eos_index)]
+        """The EoS table of draw eos_index, as a DataFrame."""
+        return self._as_frame(self.eos_subgroup[self.index_to_key(eos_index)])
+
     def get_macro(self, eos_index):
-        return self.macro_subgroup[self.index_to_key(eos_index)]
+        """The macro table of draw eos_index, as a DataFrame."""
+        return self._as_frame(self.macro_subgroup[self.index_to_key(eos_index)])
+
+    def keys(self):
+        """Dataset names of the draws, sorted."""
+        return sorted(self.eos_subgroup.keys())
+
+    def indices(self):
+        """EoS indices of the draws, in the order of keys()."""
+        return [self.key_to_index(key) for key in self.keys()]
+
+    def __len__(self):
+        return len(self.eos_subgroup)
+
+    def close(self):
+        self.h5_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+
     def __getitem__(self, name):
         match name:
             case "ns" : return self.macro_subgroup
             case "eos" : return self.eos_subgroup
-    
+
+
+class EoSPriorFamily:
+    """
+    A family of EoS priors indexed by a hyperparameter, e.g. the Zenodo
+    17352004 sets, one file per transition pressure p_t::
+
+        family = EoSPriorFamily.from_glob("data/*_ns_data.h5", r"maxpc2-([0-9.e+]+)_",
+                                          hyperparameter="p_t", eos_subgroup_path="EoS",
+                                          macro_subgroup_path="Macro",
+                                          index_to_key=lambda i: f"{i:05d}")
+        for p_t, prior in family: ...
+
+    Parameters
+    ----------
+    members : dict hyperparameter value -> EoSPriorDistribution
+    hyperparameter : str
+        Name of the hyperparameter (for labels and tables).
+    paths : dict, optional
+        value -> file path, used by posteriors() to read weights.
+    """
+
+    def __init__(self, members, hyperparameter="hyperparameter", paths=None):
+        self.members = dict(sorted(members.items()))
+        self.hyperparameter = hyperparameter
+        self.paths = dict(paths or {})
+
+    @classmethod
+    def from_glob(cls, pattern, value_regex, hyperparameter="hyperparameter", value_type=float,
+                  **prior_kwargs):
+        """
+        One EoSPriorH5 per file matching ``pattern``; the hyperparameter value
+        is group 1 of ``value_regex`` searched in the file name.  Files the
+        regex does not match are skipped.  prior_kwargs go to EoSPriorH5.
+        """
+        import glob
+        import re
+        members, paths = {}, {}
+        for path in sorted(glob.glob(str(pattern))):
+            match = re.search(value_regex, os.path.basename(path))
+            if match:
+                value = value_type(match.group(1))
+                members[value] = EoSPriorH5(path, **prior_kwargs)
+                paths[value] = path
+        return cls(members, hyperparameter=hyperparameter, paths=paths)
+
+    def values(self):
+        return list(self.members)
+
+    def __iter__(self):
+        return iter(self.members.items())
+
+    def __getitem__(self, value):
+        return self.members[value]
+
+    def __len__(self):
+        return len(self.members)
+
+    def posteriors(self, **from_h5_kwargs):
+        """
+        {value: EoSPosterior} with the weights of each member's file (see
+        EoSPosterior.from_h5; kwargs are passed to it).
+        """
+        from temperance.core.result import EoSPosterior
+        if set(self.paths) != set(self.members):
+            raise ValueError("posteriors() needs a file path for every member")
+        return {value: EoSPosterior.from_h5(self.paths[value], **from_h5_kwargs) for value in self.members}
+
+    def log_evidences(self, posteriors=None, weight_columns=None):
+        """
+        {value: ln Z}, Z = EoSPosterior.estimate_evidence: the mean
+        likelihood weight over each member's (equally weighted) prior draws.
+        """
+        posteriors = posteriors or self.posteriors()
+        out = {}
+        for value, posterior in posteriors.items():
+            columns = weight_columns if weight_columns is not None else posterior.weight_columns_available
+            evidence, _ = posterior.estimate_evidence(columns)
+            out[value] = float(np.log(evidence))
+        return out
+
+    def close(self):
+        for member in self.members.values():
+            if hasattr(member, "close"):
+                member.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
