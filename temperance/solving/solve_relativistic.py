@@ -24,7 +24,7 @@ with the common factor  cf = (1-2v) / (4π p + v/u).
 Units
 -----
 All quantities in geometric units (G = c = 1).  Radii are in units where
-1 solar mass ≈ 1.477 km.
+1 solar mass = KM_PER_MSUN ≈ 1.4766 km (temperance.utilities.units).
 """
 
 import os
@@ -41,6 +41,7 @@ try:
         xp, ode_solver, print_val,
         polytropic_eos, css_eos, interpolated_eos,
     )
+    from ..utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM, RHO_SAT_GEOM
 except ImportError:
     # Allow direct script execution: add the inner temperance/ dir to sys.path.
     _inner = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -49,6 +50,7 @@ except ImportError:
         xp, ode_solver, print_val,
         polytropic_eos, css_eos, interpolated_eos,
     )
+    from utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM, RHO_SAT_GEOM
 
 _EOS_TYPES = (interpolated_eos, polytropic_eos, css_eos)
 
@@ -116,7 +118,8 @@ def lindblom_tidal_deformability_rhs(eta, u, du, v, e, p, one_over_cs2, ell=2):
 # Core TOV integrator
 # ---------------------------------------------------------------------------
 
-def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for=500):
+def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for=500,
+                    verbose=False):
     """
     Integrate the TOV equations from the centre outward using log-enthalpy.
 
@@ -144,6 +147,8 @@ def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for
         Tidal harmonic for the Love-number integration.  Default 2.
     points_to_solve_for : int
         Number of equally-spaced log-enthalpy grid points.  Default 500.
+    verbose : bool
+        Print the central log-enthalpy and energy density.  Default False.
 
     Returns
     -------
@@ -155,8 +160,9 @@ def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for
     initial_stepsize = xp.array(1e-5) * lnhc
     ec = eos.e_of_logenthalpy(xp.array([lnhc]))[0]
     w_initial = eos.p_of_logenthalpy(xp.array([lnhc]))[0] / ec
-    print_val("Central log-enthalpy: {lnhc}", lnhc=lnhc)
-    print_val("Central energy density: {ec}", ec=ec)
+    if verbose:
+        print_val("Central log-enthalpy: {lnhc}", lnhc=lnhc)
+        print_val("Central energy density: {ec}", ec=ec)
 
     initial_state = xp.array([
         6.0 / xp.sqrt(4.0 * xp.pi * ec) * initial_stepsize / (1.0 + 3.0 * w_initial),
@@ -328,10 +334,10 @@ def get_tov_family(eos, densities, outpath=None):
         eta_R   = float(sols[-1, 2])
         vb_surf = float(sols[-1, 3])
 
-        Rs.append(r_surf * 1.477)          # km
+        Rs.append(r_surf * KM_PER_MSUN)    # km
         Ms.append(r_surf * C)              # solar masses
         Lambdas.append(eta_to_love_number(eta_R, C))
-        rhocs.append(float(eos.rho_of_logenthalpy(xp.array([lnhs[0]]))[0]) * 2.8e14 / 0.00045)
+        rhocs.append(float(eos.rho_of_logenthalpy(xp.array([lnhs[0]]))[0]) / CGS_DENSITY_TO_GEOM)
         Ms_baryon.append(r_surf * vb_surf)
 
     data = pd.DataFrame({
@@ -353,15 +359,15 @@ def get_tov_family(eos, densities, outpath=None):
 if __name__ == "__main__":
     eos = polytropic_eos(K=123.6, Gamma=2.0)
 
-    tabulation_densities = np.geomspace(0.00045e-10, 0.00045e1, 200)
+    tabulation_densities = np.geomspace(RHO_SAT_GEOM * 1e-10, RHO_SAT_GEOM * 1e1, 200)
     poly_eos = pd.DataFrame({
-        "baryon_density":    tabulation_densities * 2.8e14 / 0.00045,
-        "pressurec2":        eos.p_of_rho(tabulation_densities) * 2.8e14 / 0.00045,
-        "energy_densityc2":  eos.e_of_rho(tabulation_densities) * 2.8e14 / 0.00045,
+        "baryon_density":    tabulation_densities / CGS_DENSITY_TO_GEOM,
+        "pressurec2":        eos.p_of_rho(tabulation_densities) / CGS_DENSITY_TO_GEOM,
+        "energy_densityc2":  eos.e_of_rho(tabulation_densities) / CGS_DENSITY_TO_GEOM,
     })
     poly_eos.to_csv("poly_100_2.csv", index=False)
 
-    densities = np.linspace(0.00045, 8 * 0.00045, 100)
+    densities = np.linspace(RHO_SAT_GEOM, 8 * RHO_SAT_GEOM, 100)
     family = get_tov_family(eos, densities, outpath="macro-poly_100_2.csv")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))

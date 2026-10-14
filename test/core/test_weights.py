@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core import result, weights
+from temperance.core import result, weights
 
 
 @pytest.fixture

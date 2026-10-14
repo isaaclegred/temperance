@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sampling import branched_interpolator, eos_prior
-from sampling.eos_prior import (BaseEoSPriorSet, EoSPriorDistribution, EoSPriorH5,
+from temperance.sampling import branched_interpolator, eos_prior
+from temperance.sampling.eos_prior import (BaseEoSPriorSet, EoSPriorDistribution, EoSPriorH5,
                                 UniversalityEoSPriorSet, Extraction, EoSPriorSet,
                                 find_stable_branches, output_columns)
 
@@ -450,7 +450,7 @@ def test_native_quantiles_known_answer(eos_dir):
 
 
 def test_native_quantiles_weights_and_coverage(twin_dir):
-    from core.weights import quantile
+    from temperance.core.weights import quantile
     native = make_prior_set(EoSPriorSet, twin_dir)
     weights = np.array([5.0, 1.0, 0.5, 3.0, 2.0])
     q = [0.1, 0.5, 0.9]
@@ -502,7 +502,6 @@ def test_native_quantiles_match_universality(usamples, request, case):
 
 def test_plotting_get_quantiles_dispatch(usamples, twin_dir):
     """plotting.get_quantiles gives the same table through either prior class."""
-    pytest.importorskip("universality")
     from temperance.core.result import EoSPosterior, WeightColumn
     from temperance.plotting import get_quantiles as gq
     posterior = EoSPosterior(pd.DataFrame({"eos": np.arange(NUM_EOS),
@@ -527,3 +526,8 @@ def test_get_property_verbose(eos_dir, capsys):
     loud = prior.get_property(range(NUM_EOS), ["R"], EXTRACTION_CASES["static"][0], verbose=True)
     pd.testing.assert_frame_equal(quiet, loud)
     assert f"{NUM_EOS}/{NUM_EOS}" in capsys.readouterr().out
+
+
+def test_h5_opened_read_only(eos_h5):
+    assert eos_h5.h5_file.mode == "r"
+    assert isinstance(eos_h5.h5_path, str)

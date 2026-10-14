@@ -491,8 +491,7 @@ NativeEoSPriorSet = EoSPriorSet
 class EoSPriorH5(EoSPriorDistribution):
     def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns", index_to_key=lambda x : str(x)):
         self.h5_path = str(h5_path)
-        self.h5_path = h5_path        
-        self.h5_file = h5py.File(name=self.h5_path)
+        self.h5_file = h5py.File(self.h5_path, mode="r")
         self.eos_subgroup = self.h5_file[eos_subgroup_path]
         self.macro_subgroup = self.h5_file[macro_subgroup_path]
         self.index_to_key = index_to_key
