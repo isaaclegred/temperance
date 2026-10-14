@@ -279,15 +279,16 @@ def get_weight_columns(samples, weight_columns):
     that the column properties have been identified correctly)
     """
     if weight_columns is not None:
-        iterator = iter(weight_columns) # Must be iterable
-        if isinstance(weight_columns[0], WeightColumn, False):
+        weight_columns = list(weight_columns)
+        if all(isinstance(column, WeightColumn) for column in weight_columns):
             # User has already phrased it in terms of weight
             # columns
             return weight_columns
-        if isinstance(weight_column[0], tuple):
+        if all(isinstance(column, tuple) for column in weight_columns):
             # a list of tuples of name - is_log pairs
             return [WeightColumn(column_name, is_log, False) for column_name,
-                    is_log in weight_columsn]
+                    is_log in weight_columns]
+        raise TypeError("weight_columns must be WeightColumns or (name, is_log) tuples")
     weight_columns = []
     for column_name in samples.keys():
         if "log" in column_name and "weight" in column_name:
@@ -356,15 +357,21 @@ def get_total_weight(samples:pd.DataFrame,
     weights_df["total_weight"] = np.transpose(np.exp(total_logweights))
     return weights_df
 
+def _logical_or_name(weight_columns):
+    """Default name for the logical-or of some weight columns."""
+    tags = [column.name.split("weight_")[-1] for column in weight_columns]
+    return "weight_" + "_or_".join(tags)
+
+
 def get_logical_or_weight_column(samples:pd.DataFrame, weight_columns:list[WeightColumn], result_name=None, **kwargs):
     """
     Instead of getting the and of the weights (that is the product of the weights), get 
     the logical or of the columns, so that if any is true, the  
     """
     if result_name is None:
-        result_name = "weight_{weight_column_1.name.split['weight_'][-1]}_or_{weight_column_2.name.split('weight')[-1]}"
-    for weight_column in weight_columns:
-        weight_column.is_inverted=not(weight_column.is_inverted)
+        result_name = _logical_or_name(weight_columns)
+    # invert copies, so the caller's weight columns are left unchanged
+    weight_columns = [weight_column.get_inverse() for weight_column in weight_columns]
     
     output_weights = get_total_weight(samples, weight_columns, **kwargs)
     
@@ -441,15 +448,15 @@ class EoSPosterior:
         Returns an array of weights in the order of the EoSs in self.samples
         """
         if weight_column not in self.weight_columns_available:
-            if weight_column.name in list(map(self.weight_columns_available, lambda column : column.name)):
+            if weight_column.name in [column.name for column in self.weight_columns_available]:
                warnings.warn(f"Using a weight_column which is present in the EoSPosterior, "
-               "but with using logweight tag {weight_column.is_log} and invert tag "
-               "{weight_column.inverted}, at least one of which is inconsistent with the posterior "
+               f"but with using logweight tag {weight_column.is_log} and invert tag "
+               f"{weight_column.is_inverted}, at least one of which is inconsistent with the posterior "
                "object", category=RuntimeWarning)
             else:
-                raise f"Weight column {weight_column.name} is not present in eos posterior!"
+                raise ValueError(f"Weight column {weight_column.name} is not present in eos posterior!")
         
-            return get_column_weight(self.samples, weight_column)
+        return get_column_weight(self.samples, weight_column)
 
     def get_column_logweight(self, weight_column):
         if weight_column not in self.weight_columns_available:
@@ -457,8 +464,8 @@ class EoSPosterior:
                                               self.weight_columns_available
                                           )):
                warnings.warn(f"Using a weight_column which is present in the EoSPosterior, "
-               "but with using logweight tag {weight_column.is_log} and invert tag "
-               "{weight_column.inverted}, at least one of which is inconsistent with the posterior "
+               f"but with using logweight tag {weight_column.is_log} and invert tag "
+               f"{weight_column.is_inverted}, at least one of which is inconsistent with the posterior "
                "object", category=RuntimeWarning)
             else:
                 raise ValueError(f"Weight column {weight_column.name} is not present in eos posterior!,  available weight columns are {self.weight_columns_available}")
@@ -555,7 +562,6 @@ class EoSPosterior:
         # TODO : find a way to do this that is computationally efficient and
         # doesn't look weird
         evidence = np.sum(weights * prior)
-        print("weights", weights)
         var_evidence = np.sum(prior**2)*np.sum((squares - evidence**2) * prior)
         return evidence, var_evidence
 
@@ -644,17 +650,8 @@ class EoSPosterior:
                 self.samples[key] = new_samples[key]
                 
     def add_logical_or_weight_column(self, weight_columns, result_name=None):
-        result_weight, result_weight_column = get_logical_or_weight_column(
-            samples=self.samples, weight_columns=weight_columns, result_name=result_name,
-            index_columns=self.eos_column)
-
-        print(result_weight)
-        print(result_weight[result_name])
-        self.weight_columns_available.append(result_weight_column)
-        
-    def add_logical_or_weight_column(self, weight_columns, result_name=None):
         if result_name is None:
-            result_name = "weight_{weight_column_1.name.split['weight_'][-1]}_or_{weight_column_2.name.split('weight')[-1]}"
+            result_name = _logical_or_name(weight_columns)
         to_negate_weights = copy.deepcopy(weight_columns)
         for weight_column in to_negate_weights :
             weight_column.is_inverted=not(weight_column.is_inverted)

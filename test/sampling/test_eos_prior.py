@@ -527,3 +527,8 @@ def test_get_property_verbose(eos_dir, capsys):
     loud = prior.get_property(range(NUM_EOS), ["R"], EXTRACTION_CASES["static"][0], verbose=True)
     pd.testing.assert_frame_equal(quiet, loud)
     assert f"{NUM_EOS}/{NUM_EOS}" in capsys.readouterr().out
+
+
+def test_h5_opened_read_only(eos_h5):
+    assert eos_h5.h5_file.mode == "r"
+    assert isinstance(eos_h5.h5_path, str)

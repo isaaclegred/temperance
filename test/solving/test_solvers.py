@@ -214,3 +214,12 @@ class TestNewtonianSolver:
         assert set(family.columns) >= {"M", "R", "k2", "M_baryon"}
         assert np.all(family["M"] > 0)
         assert np.all(family["R"] > 0)
+
+
+def test_lindblom_solver_quiet_by_default(capsys):
+    eos = polytropic_eos(K=123.6, Gamma=2.0)
+    lnhc = eos.logenthalpy_of_rho(np.array([3 * 0.00045]))[0]
+    lindblom_solver(lnhc, eos)
+    assert capsys.readouterr().out == ""
+    lindblom_solver(lnhc, eos, verbose=True)
+    assert "Central log-enthalpy" in capsys.readouterr().out

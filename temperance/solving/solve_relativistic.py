@@ -116,7 +116,8 @@ def lindblom_tidal_deformability_rhs(eta, u, du, v, e, p, one_over_cs2, ell=2):
 # Core TOV integrator
 # ---------------------------------------------------------------------------
 
-def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for=500):
+def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for=500,
+                    verbose=False):
     """
     Integrate the TOV equations from the centre outward using log-enthalpy.
 
@@ -144,6 +145,8 @@ def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for
         Tidal harmonic for the Love-number integration.  Default 2.
     points_to_solve_for : int
         Number of equally-spaced log-enthalpy grid points.  Default 500.
+    verbose : bool
+        Print the central log-enthalpy and energy density.  Default False.
 
     Returns
     -------
@@ -155,8 +158,9 @@ def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for
     initial_stepsize = xp.array(1e-5) * lnhc
     ec = eos.e_of_logenthalpy(xp.array([lnhc]))[0]
     w_initial = eos.p_of_logenthalpy(xp.array([lnhc]))[0] / ec
-    print_val("Central log-enthalpy: {lnhc}", lnhc=lnhc)
-    print_val("Central energy density: {ec}", ec=ec)
+    if verbose:
+        print_val("Central log-enthalpy: {lnhc}", lnhc=lnhc)
+        print_val("Central energy density: {ec}", ec=ec)
 
     initial_state = xp.array([
         6.0 / xp.sqrt(4.0 * xp.pi * ec) * initial_stepsize / (1.0 + 3.0 * w_initial),
