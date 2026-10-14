@@ -171,3 +171,124 @@ def test_piecewise_eos_is_accurate_next_to_segment_boundaries():
     below = lnh2 - 1e-4
     e_b = eos.e_of_logenthalpy(np.array([below]))[0]
     assert eos.cs2_of_logenthalpy(np.array([below]))[0] == pytest.approx(G2 * K2 * e_b**G2 / (e_b + K2 * e_b**G2), rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# piecewise_eos: rest-mass polytropes and first-order transitions
+# ---------------------------------------------------------------------------
+
+RHO_T = 2 * 0.00045
+
+
+def test_rest_mass_polytrope_segment_matches_polytropic_eos():
+    exact = polytropic_eos(K=100.0, Gamma=2.0)
+    eos = piecewise_eos([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": RHO_T},
+                         {"type": "css", "cs2": 0.5, "e_max": 0.01}])
+    rho = np.geomspace(1e-6, 0.9 * RHO_T, 7)
+    lnh = exact.logenthalpy_of_rho(rho)
+    np.testing.assert_allclose(eos.p_of_logenthalpy(lnh), exact.p_of_logenthalpy(lnh), rtol=1e-6)
+    np.testing.assert_allclose(eos.e_of_logenthalpy(lnh), exact.e_of_logenthalpy(lnh), rtol=1e-6)
+    np.testing.assert_allclose(eos.logenthalpy_of_rho(rho), lnh, rtol=1e-6)
+
+
+def test_causal_core_matches_closed_form():
+    """polytrope + c_s^2 = 1 core, as in TrappedNullGeos' causal_core_table."""
+    K, Gamma, cs2 = 100.0, 2.0, 1.0
+    eos = piecewise_eos([{"type": "rest_mass_polytrope", "Gamma": Gamma, "K": K, "rho_max": RHO_T},
+                         {"type": "css", "cs2": cs2, "e_max": 0.05}])
+    p_t = K * RHO_T**Gamma
+    e_t = RHO_T + p_t / (Gamma - 1)
+    A = e_t * (1 + cs2) + p_t - cs2 * e_t
+    rho = np.geomspace(1.01 * RHO_T, 10 * RHO_T, 6)
+    e = (A * (rho / RHO_T) ** (1 + cs2) - p_t + cs2 * e_t) / (1 + cs2)
+    np.testing.assert_allclose(eos.e_of_rho(rho), e, rtol=1e-5)
+    np.testing.assert_allclose(eos.p_of_rho(rho), p_t + cs2 * (e - e_t), rtol=1e-5)
+
+
+def test_rest_mass_polytrope_after_another_segment_is_continuous():
+    eos = piecewise_eos([{"type": "rest_mass_polytrope", "Gamma": 1.4, "K": 0.5, "rho_max": 1e-4},
+                         {"type": "rest_mass_polytrope", "Gamma": 3.0, "e_max": 3e-3}])
+    rho_b = 1e-4
+    below, above = rho_b * (1 - 1e-7), rho_b * (1 + 1e-7)
+    for function in (eos.p_of_rho, eos.e_of_rho, eos.logenthalpy_of_rho):
+        assert function(np.array([above]))[0] == pytest.approx(function(np.array([below]))[0], rel=1e-5)
+    lnh = np.linspace(0.01, 0.3, 9)
+    e, p, rho = eos.e_of_logenthalpy(lnh), eos.p_of_logenthalpy(lnh), eos.rho_of_logenthalpy(lnh)
+    np.testing.assert_allclose((e + p) / rho, np.exp(lnh), rtol=1e-6)
+    assert eos.e_of_logenthalpy(np.array([0.3]))[0] < 3e-3 * 1.01
+
+
+@pytest.fixture
+def fopt():
+    return piecewise_eos([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": RHO_T},
+                          {"type": "jump", "delta_e": 1e-3},
+                          {"type": "css", "cs2": 1.0, "e_max": 0.05}])
+
+
+def test_jump_is_recorded(fopt):
+    (jump,) = fopt.jumps
+    p_t = 100.0 * RHO_T**2
+    e_t = RHO_T + p_t
+    assert jump["p"] == pytest.approx(p_t)
+    assert jump["e_below"] == pytest.approx(e_t) and jump["e_above"] == pytest.approx(e_t + 1e-3)
+    assert jump["rho_below"] == pytest.approx(RHO_T)
+    assert jump["rho_above"] / jump["rho_below"] == pytest.approx((e_t + 1e-3 + p_t) / (e_t + p_t))
+    assert jump["lnh"] == pytest.approx(float(np.log(1 + 2 * 100.0 * RHO_T)))
+
+
+def test_jump_in_logenthalpy(fopt):
+    (jump,) = fopt.jumps
+    eps = 1e-9
+    lnh = np.array([jump["lnh"] - eps, jump["lnh"], jump["lnh"] + eps])
+    e, p, rho = fopt.e_of_logenthalpy(lnh), fopt.p_of_logenthalpy(lnh), fopt.rho_of_logenthalpy(lnh)
+    # p is continuous; e and rho jump, and the transition point itself is the dense side
+    np.testing.assert_allclose(p, jump["p"], rtol=1e-6)
+    assert e[0] == pytest.approx(jump["e_below"], rel=1e-6)
+    assert e[1] == pytest.approx(jump["e_above"], rel=1e-6) and e[2] == pytest.approx(jump["e_above"], rel=1e-6)
+    assert rho[0] == pytest.approx(jump["rho_below"], rel=1e-6)
+    assert rho[2] == pytest.approx(jump["rho_above"], rel=1e-6)
+    assert fopt.logenthalpy_of_p(np.array([jump["p"]]))[0] == pytest.approx(jump["lnh"], rel=1e-9)
+
+
+def test_coexistence_interval_in_density(fopt):
+    (jump,) = fopt.jumps
+    rho = np.linspace(jump["rho_below"], jump["rho_above"], 11)
+    np.testing.assert_allclose(fopt.p_of_rho(rho), jump["p"], rtol=1e-12)
+    np.testing.assert_allclose(fopt.logenthalpy_of_rho(rho), jump["lnh"], rtol=1e-12)
+    e = fopt.e_of_rho(rho)
+    np.testing.assert_allclose(e, (jump["e_below"] + jump["p"]) * rho / jump["rho_below"] - jump["p"], rtol=1e-12)
+    # first law inside the mixed phase: d ln rho = de / (e + p)
+    np.testing.assert_allclose(np.diff(np.log(rho)), np.diff(np.log(e + jump["p"])), rtol=1e-10)
+
+
+def test_hybrid_star_matches_quasi_maxwell_ramp(fopt):
+    """A true jump and a c_s^2 = 1e-4 ramp over the same delta_e give the same star."""
+    (jump,) = fopt.jumps
+    ramp = piecewise_eos([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": RHO_T},
+                          {"type": "css", "cs2": 1e-4, "e_max": jump["e_above"]},
+                          {"type": "css", "cs2": 1.0, "e_max": 0.05}], n_table=2000)
+    stars = []
+    for eos in (fopt, ramp):
+        lnhc = float(eos.logenthalpy_of_p(np.array([4 * jump["p"]]))[0])
+        _, sol = lindblom_solver(lnhc, eos, points_to_solve_for=4000)
+        r = np.sqrt(sol[-1, 0])
+        stars.append((r * sol[-1, 1], r))
+    (M_jump, R_jump), (M_ramp, R_ramp) = stars
+    assert M_jump == pytest.approx(M_ramp, rel=5e-3)
+    assert R_jump == pytest.approx(R_ramp, rel=5e-3)
+
+
+@pytest.mark.parametrize("segments, message", [
+    ([{"type": "jump", "delta_e": 1e-3}], "first or last"),
+    ([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": RHO_T},
+      {"type": "jump", "delta_e": 1e-3}], "first or last"),
+    ([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": RHO_T},
+      {"type": "jump", "delta_e": -1e-3}, {"type": "css", "cs2": 1.0, "e_max": 0.05}], "positive"),
+    ([{"type": "rest_mass_polytrope", "Gamma": 2.0, "rho_max": RHO_T}], "must specify K"),
+    ([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": RHO_T},
+      {"type": "jump", "delta_e": 1e-3}, {"type": "jump", "delta_e": 1e-3},
+      {"type": "css", "cs2": 1.0, "e_max": 0.05}], "consecutive"),
+])
+def test_piecewise_segment_errors(segments, message):
+    with pytest.raises(ValueError, match=message):
+        piecewise_eos(segments)

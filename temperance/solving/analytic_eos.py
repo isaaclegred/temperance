@@ -36,6 +36,7 @@ import numpy as np
 import scipy
 import scipy.integrate
 import scipy.interpolate
+import scipy.optimize
 
 try:
     from ..utilities.units import CGS_DENSITY_TO_GEOM
@@ -374,7 +375,8 @@ class _PiecewiseInterpolator:
 
 class piecewise_eos:
     """
-    Piecewise EoS assembled from energy_density_polytrope and CSS segments.
+    Piecewise EoS assembled from polytropic, constant-speed-of-sound and
+    first-order-transition segments.
 
     Segments are joined with pressure continuity enforced at each boundary.
     The cumulative log-enthalpy is tracked analytically across segments.
@@ -383,9 +385,9 @@ class piecewise_eos:
     Parameters
     ----------
     segments : list of dict
-        Each dict describes one segment.  Two types are supported:
+        Each dict describes one segment.  Supported types:
 
-        Polytropic segment::
+        Energy-density polytrope, p = K e^Gamma::
 
             {"type": "polytrope", "Gamma": float, "e_max": float}
             {"type": "polytrope", "Gamma": float, "K": float, "e_max": float}
@@ -393,6 +395,17 @@ class piecewise_eos:
         K is inferred from pressure continuity at the lower boundary for all
         segments after the first; it must be given explicitly for the first.
         An optional ``"Gamma1"`` key overrides the dynamical adiabatic index.
+
+        Rest-mass polytrope, p = K rho^Gamma, e = (1 + a) rho + p / (Gamma - 1)::
+
+            {"type": "rest_mass_polytrope", "Gamma": float, "K": float, "rho_max": float}
+            {"type": "rest_mass_polytrope", "Gamma": float, "e_max": float}
+
+        The usual piecewise-polytrope segment (Read et al. 2009).  As the
+        first segment K is required and a = 0; later segments get K and a
+        from continuity of p and e.  The upper boundary is given by
+        ``"rho_max"`` or ``"e_max"``.  An optional ``"Gamma1"`` overrides
+        the dynamical adiabatic index.
 
         CSS segment::
 
@@ -402,15 +415,29 @@ class piecewise_eos:
         from the previous segment's upper boundary.  CSS segments must not
         be the first segment (p=0 at e=0 would produce a singular lnh).
 
+        First-order phase transition (latent-heat jump)::
+
+            {"type": "jump", "delta_e": float}
+
+        At the current pressure p_t the energy density jumps from e_t to
+        e_t + delta_e (a Maxwell construction).  The pressure and
+        log-enthalpy are continuous; the baryon density jumps by
+        (e_t + delta_e + p_t) / (e_t + p_t).  Must not be first or last.
+
     n_table : int
         Number of grid points per segment used when building the table.
 
     Notes
     -----
-    Each segment is interpolated with its own cubic spline.  The sound speed
-    jumps and the other functions have kinks at segment boundaries, which a
-    single spline over the whole table would smooth over (with errors of
-    several percent next to a boundary).
+    Each segment is interpolated with its own cubic spline, so the kinks
+    between segments are not smoothed over.  Functions of lnh (e, rho, cs2)
+    are discontinuous at a jump, since lnh is constant across it; at exactly
+    the transition lnh they return the high-density limit.  The
+    transitions are listed in ``jumps``, each a dict with keys ``lnh``,
+    ``p``, ``e_below``, ``e_above``, ``rho_below`` and ``rho_above``.
+    Functions of rho are continuous: inside the coexistence interval p and
+    lnh are constant and e is linear in rho.  TOV integration in lnh is
+    unaffected because p and lnh are continuous.
 
     Examples
     --------
@@ -419,67 +446,102 @@ class piecewise_eos:
     ...     {"type": "polytrope", "Gamma": 2.5,              "e_max": 5e-4},
     ...     {"type": "css",       "cs2":  0.6,               "e_max": 2e-3},
     ... ])
+
+    A hadronic polytrope, a latent-heat jump and a causal core::
+
+    >>> eos = piecewise_eos([
+    ...     {"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 100.0, "rho_max": 9e-4},
+    ...     {"type": "jump", "delta_e": 1e-3},
+    ...     {"type": "css", "cs2": 1.0, "e_max": 2e-2},
+    ... ])
     """
 
     def __init__(self, segments, n_table=500):
         if not segments:
             raise ValueError("segments must be non-empty.")
         first = segments[0]
-        if first["type"] == "polytrope" and "K" not in first:
+        if first["type"] in ("polytrope", "rest_mass_polytrope") and "K" not in first:
             raise ValueError("The first polytropic segment must specify K.")
         if first["type"] == "css":
             raise ValueError("The first segment cannot be CSS (lnh diverges at e=0 with p=0).")
+        if first["type"] == "jump" or segments[-1]["type"] == "jump":
+            raise ValueError("A jump segment cannot be the first or last segment.")
 
-        # One table piece per segment, each including its lower boundary, so
-        # that every segment gets its own spline.
+        # One table piece per (non-jump) segment, each including its lower
+        # boundary, so that every segment gets its own spline and kinks or
+        # jumps between segments are not smoothed over.  Each piece is a
+        # dict of arrays e, p, lnh, cs2 (rho follows from the others).
         pieces = []
+        jump_before = []   # the jump (dict) preceding each piece, or None
+        self.jumps = []
 
         e_lo   = 0.0
         p_lo   = 0.0
         lnh_lo = 0.0
+        pending_jump = None
 
         for i, seg in enumerate(segments):
-            e_hi    = seg["e_max"]
-            # The first segment avoids e=0; later ones start at (and include)
-            # the previous segment's upper boundary.
-            if i == 0:
-                e_grid = np.linspace(e_hi * 1e-8, e_hi, n_table)
+            if seg["type"] == "jump":
+                if seg["delta_e"] <= 0:
+                    raise ValueError("delta_e must be positive.")
+                if pending_jump is not None:
+                    raise ValueError("Two consecutive jump segments; combine them into one.")
+                e_hi = e_lo + seg["delta_e"]
+                rho_below = (e_lo + p_lo) / np.exp(lnh_lo)
+                pending_jump = {"lnh": lnh_lo, "p": p_lo, "e_below": e_lo, "e_above": e_hi,
+                                "rho_below": rho_below,
+                                "rho_above": rho_below * (e_hi + p_lo) / (e_lo + p_lo)}
+                self.jumps.append(pending_jump)
+                e_lo = e_hi
+                continue
+
+            if seg["type"] == "rest_mass_polytrope":
+                e_grid, p_grid, lnh_grid, cs2_grid = self._rest_mass_polytrope(
+                    seg, i, e_lo, p_lo, lnh_lo, n_table)
             else:
-                e_grid = np.linspace(e_lo, e_hi, n_table + 1)
+                e_hi    = seg["e_max"]
+                # The first segment avoids e=0; later ones start at (and
+                # include) the previous segment's upper boundary.
+                if i == 0:
+                    e_grid = np.linspace(e_hi * 1e-8, e_hi, n_table)
+                else:
+                    e_grid = np.linspace(e_lo, e_hi, n_table + 1)
 
-            if seg["type"] == "polytrope":
-                Gamma  = seg["Gamma"]
-                Gamma1 = seg.get("Gamma1", Gamma)
-                K      = seg["K"] if i == 0 else p_lo / e_lo ** Gamma
+                if seg["type"] == "polytrope":
+                    Gamma  = seg["Gamma"]
+                    Gamma1 = seg.get("Gamma1", Gamma)
+                    K      = seg["K"] if i == 0 else p_lo / e_lo ** Gamma
 
-                p_grid = K * e_grid ** Gamma
+                    p_grid = K * e_grid ** Gamma
 
-                # lnh = lnh_lo + Gamma/(Gamma-1) * ln((1 + K*e^(Gamma-1)) / ref)
-                # ref = 1 + K*e_lo^(Gamma-1);  at e_lo=0 this is 1.
-                ref      = 1.0 + K * e_lo ** (Gamma - 1.0) if e_lo > 0.0 else 1.0
-                lnh_grid = lnh_lo + Gamma / (Gamma - 1.0) * np.log(
-                    (1.0 + K * e_grid ** (Gamma - 1.0)) / ref
-                )
-                cs2_grid = Gamma1 * p_grid / (e_grid + p_grid)
+                    # lnh = lnh_lo + Gamma/(Gamma-1) * ln((1 + K*e^(Gamma-1)) / ref)
+                    # ref = 1 + K*e_lo^(Gamma-1);  at e_lo=0 this is 1.
+                    ref      = 1.0 + K * e_lo ** (Gamma - 1.0) if e_lo > 0.0 else 1.0
+                    lnh_grid = lnh_lo + Gamma / (Gamma - 1.0) * np.log(
+                        (1.0 + K * e_grid ** (Gamma - 1.0)) / ref
+                    )
+                    cs2_grid = Gamma1 * p_grid / (e_grid + p_grid)
 
-            elif seg["type"] == "css":
-                cs2_val  = seg["cs2"]
-                p_grid   = p_lo + cs2_val * (e_grid - e_lo)
+                elif seg["type"] == "css":
+                    cs2_val  = seg["cs2"]
+                    p_grid   = p_lo + cs2_val * (e_grid - e_lo)
 
-                # integral_{e_lo}^{e} dp/(e'+p') = cs2/(1+cs2) * ln((e+p(e)) / (e_lo+p_lo))
-                lnh_grid = lnh_lo + cs2_val / (1.0 + cs2_val) * np.log(
-                    (e_grid + p_grid) / (e_lo + p_lo)
-                )
-                cs2_grid = np.full_like(e_grid, cs2_val)
+                    # integral_{e_lo}^{e} dp/(e'+p') = cs2/(1+cs2) * ln((e+p(e)) / (e_lo+p_lo))
+                    lnh_grid = lnh_lo + cs2_val / (1.0 + cs2_val) * np.log(
+                        (e_grid + p_grid) / (e_lo + p_lo)
+                    )
+                    cs2_grid = np.full_like(e_grid, cs2_val)
 
-            else:
-                raise ValueError(f"Unknown segment type '{seg['type']}'.")
+                else:
+                    raise ValueError(f"Unknown segment type '{seg['type']}'.")
 
             piece = {"e": e_grid, "p": p_grid, "lnh": lnh_grid, "cs2": cs2_grid}
             piece["rho"] = (e_grid + p_grid) / np.exp(lnh_grid)
             pieces.append(piece)
+            jump_before.append(pending_jump)
+            pending_jump = None
 
-            e_lo   = e_hi
+            e_lo   = float(e_grid[-1])
             p_lo   = float(p_grid[-1])
             lnh_lo = float(lnh_grid[-1])
 
@@ -490,10 +552,56 @@ class piecewise_eos:
         self.p_of_logenthalpy   = by("lnh", "p")
         self.rho_of_logenthalpy = by("lnh", "rho")
         self.cs2_of_logenthalpy = by("lnh", "cs2")
-        self.logenthalpy_of_rho = by("rho", "lnh")
-        self.p_of_rho           = by("rho", "p")
-        self.e_of_rho           = by("rho", "e")
         self.logenthalpy_of_p   = by("p", "lnh")
+
+        # Functions of rho also cover the coexistence interval of each jump,
+        # where p and lnh are constant and e = (e_below + p) rho / rho_below - p.
+        rho_pieces = {key: [] for key in ("lnh", "p", "e")}
+        for piece, jump in zip(pieces, jump_before):
+            if jump is not None:
+                rho = np.array([jump["rho_below"], jump["rho_above"]])
+                rho_pieces["lnh"].append((rho, np.full(2, jump["lnh"])))
+                rho_pieces["p"].append((rho, np.full(2, jump["p"])))
+                rho_pieces["e"].append((rho, np.array([jump["e_below"], jump["e_above"]])))
+            for key in rho_pieces:
+                rho_pieces[key].append((piece["rho"], piece[key]))
+        self.logenthalpy_of_rho = _PiecewiseInterpolator(rho_pieces["lnh"])
+        self.p_of_rho           = _PiecewiseInterpolator(rho_pieces["p"])
+        self.e_of_rho           = _PiecewiseInterpolator(rho_pieces["e"])
+
+    @staticmethod
+    def _rest_mass_polytrope(seg, i, e_lo, p_lo, lnh_lo, n_table):
+        """Grid for p = K rho^Gamma, e = (1 + a) rho + p / (Gamma - 1)."""
+        Gamma  = seg["Gamma"]
+        Gamma1 = seg.get("Gamma1", Gamma)
+        if i == 0:
+            K, a, rho_lo = seg["K"], 0.0, 0.0
+        else:
+            rho_lo = (e_lo + p_lo) / np.exp(lnh_lo)
+            K = p_lo / rho_lo ** Gamma
+            a = e_lo / rho_lo - 1.0 - K * rho_lo ** (Gamma - 1.0) / (Gamma - 1.0)
+
+        def e_of_rho(rho):
+            return (1.0 + a) * rho + K * rho ** Gamma / (Gamma - 1.0)
+
+        if "rho_max" in seg:
+            rho_hi = seg["rho_max"]
+        else:
+            upper = max(seg["e_max"], 2.0 * rho_lo)
+            while e_of_rho(upper) < seg["e_max"]:
+                upper *= 2.0
+            rho_hi = scipy.optimize.brentq(lambda rho: e_of_rho(rho) - seg["e_max"],
+                                           rho_lo, upper, xtol=1e-16, rtol=1e-14)
+        if i == 0:
+            rho_grid = np.geomspace(rho_hi * 1e-8, rho_hi, n_table)
+        else:
+            rho_grid = np.linspace(rho_lo, rho_hi, n_table + 1)
+        p_grid = K * rho_grid ** Gamma
+        e_grid = e_of_rho(rho_grid)
+        # h = (e + p) / rho = 1 + a + K Gamma rho^(Gamma-1) / (Gamma - 1)
+        lnh_grid = np.log(1.0 + a + K * Gamma * rho_grid ** (Gamma - 1.0) / (Gamma - 1.0))
+        cs2_grid = Gamma1 * p_grid / (e_grid + p_grid)
+        return e_grid, p_grid, lnh_grid, cs2_grid
 
 
 class analytic_composition_dependent_eos:
