@@ -11,15 +11,15 @@ Units: geometric (G = c = 1).  1 Msun = 1.477 km in these units.
 import numpy as np
 import pytest
 
-from solving.analytic_eos import polytropic_eos, interpolated_eos
-from solving.solve_relativistic import (
+from temperance.solving.analytic_eos import polytropic_eos, interpolated_eos
+from temperance.solving.solve_relativistic import (
     lindblom_solver,
     solve_tov,
     construct_star,
     get_tov_family,
     eta_to_love_number,
 )
-from solving.solve_newtonian_structure import (
+from temperance.solving.solve_newtonian_structure import (
     newtonian_solver,
     solve_newtonian,
     construct_newtonian_star,

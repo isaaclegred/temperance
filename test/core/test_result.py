@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core import result
+from temperance.core import result
 
 
 def test_uniform_mass_pdf_support():
@@ -85,4 +85,4 @@ def test_logical_or_weight_column_naming_and_inputs_unchanged(capsys):
 
 def test_properties_module_imports():
     import importlib
-    importlib.import_module("core.properties")
+    importlib.import_module("temperance.core.properties")

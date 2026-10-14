@@ -8,13 +8,8 @@ import pandas as pd
 import pytest
 from scipy.stats import multivariate_normal
 
-from collections import namedtuple
-
-from core import kde, result
-
-# Stand-in for temperance.core.stats.SamplesColumn, which can't be imported
-# without universality yet; KDEFunction only reads .name and .bandwidth
-SamplesColumn = namedtuple("SamplesColumn", ["name", "label", "bandwidth"])
+from temperance.core import kde, result
+from temperance.core.stats import SamplesColumn
 
 
 @pytest.fixture
@@ -134,8 +129,6 @@ def test_kde_function_grid_methods_match_universality(ukde, ustats, rng):
 
 
 def test_legacy_kde_function_alias():
-    # importing the full package still needs universality (sampling, plotting)
-    pytest.importorskip("universality")
     from temperance.core.kde import KDEFunction
     from temperance.external.universality_density_estimate import kde_function
     assert kde_function is KDEFunction
