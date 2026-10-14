@@ -72,7 +72,13 @@ def stable_mask(mass, radius=None, central_variable=None, min_mass=None, mask=No
         else:
             x = np.asarray(central_variable, dtype=float)[order]
             x = np.log(x) if np.all(x > 0) else x
-        stable = _turning_point(M, R, x)
+        # Stars at the same central value (e.g. pressures one ulp apart, whose
+        # logs coincide) are the same star: merge them so the gradient stays finite.
+        first = np.r_[True, np.diff(x) != 0]
+        if first.all():
+            stable = _turning_point(M, R, x)
+        else:
+            stable = _turning_point(M[first], R[first], x[first])[np.cumsum(first) - 1]
 
     result = np.empty(n, dtype=bool)
     result[order] = stable

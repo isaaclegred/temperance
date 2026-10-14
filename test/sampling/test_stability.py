@@ -113,3 +113,15 @@ def test_matches_trapped_null_geos_rule():
         R = np.cumsum(rng.normal(-0.1, 0.3, 40)) + 20
         np.testing.assert_array_equal(stable_mask(M, R, central_variable=pc),
                                       trapgeo_stability.stable_mask(pc, M, R))
+
+
+def test_repeated_central_values_are_merged():
+    """Pressures one ulp apart have equal logs; that must not produce NaN gradients."""
+    pc = PC.copy()
+    M, R = np.insert(TWIN_M, 6, TWIN_M[6]), np.insert(TWIN_R, 6, TWIN_R[6])
+    pc = np.insert(pc, 6, np.nextafter(pc[6], np.inf))
+    with np.errstate(all="raise"):
+        mask = stable_mask(M, R, central_variable=pc)
+    expected = stable_mask(TWIN_M, TWIN_R, central_variable=PC)
+    np.testing.assert_array_equal(np.delete(mask, 6), expected)
+    assert mask[6] == expected[6]
