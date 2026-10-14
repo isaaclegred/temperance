@@ -17,6 +17,7 @@ try:
         xp, ode_solver, print_val,
         polytropic_eos, css_eos, interpolated_eos,
     )
+    from ..utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM, RHO_SAT_GEOM
 except ImportError:
     _inner = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     sys.path.insert(0, _inner)
@@ -24,6 +25,7 @@ except ImportError:
         xp, ode_solver, print_val,
         polytropic_eos, css_eos, interpolated_eos,
     )
+    from utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM, RHO_SAT_GEOM
 
 _EOS_TYPES = (interpolated_eos, polytropic_eos, css_eos)
 
@@ -181,10 +183,10 @@ def get_newtonian_family(eos, densities, outpath=None):
         v_term = sols[-1, 1]
         eta_term = sols[-1, 2]
         vb_term = sols[-1, 3]
-        Rs.append(np.sqrt(u_term) * 1.477)  # in km
+        Rs.append(np.sqrt(u_term) * KM_PER_MSUN)  # in km
         Ms.append(np.sqrt(u_term) * v_term)  # in solar masses
         k2s.append(eta_to_love_number_newtonian(eta_term))
-        rhocs.append(eos.rho_of_logenthalpy(xp.array([lnhs[0]]))[0] * 2.8e14 / .00045)
+        rhocs.append(eos.rho_of_logenthalpy(xp.array([lnhs[0]]))[0] / CGS_DENSITY_TO_GEOM)
         Ms_baryon.append(np.sqrt(u_term) * vb_term)
     data = pd.DataFrame({"central_baryon_density": np.array(rhocs), "M": np.array(Ms), "R": np.array(Rs), "k2": np.array(k2s), "M_baryon": np.array(Ms_baryon)})
     if outpath is not None:
@@ -194,10 +196,10 @@ def get_newtonian_family(eos, densities, outpath=None):
 
 if __name__ == "__main__":
     eos = polytropic_eos(K=123.6, Gamma=2.0)
-    tabulation_densities = np.geomspace(.00045e-10, .00045e1, 200)
+    tabulation_densities = np.geomspace(RHO_SAT_GEOM * 1e-10, RHO_SAT_GEOM * 1e1, 200)
     poly_pressure = eos.p_of_rho(tabulation_densities)
     poly_energy = eos.e_of_rho(tabulation_densities)
-    poly_eos = pd.DataFrame({"baryon_density": tabulation_densities * 2.8e14 / .00045, "pressurec2": poly_pressure * 2.8e14 / .00045, "energy_densityc2": poly_energy * 2.8e14 / .00045})
+    poly_eos = pd.DataFrame({"baryon_density": tabulation_densities / CGS_DENSITY_TO_GEOM, "pressurec2": poly_pressure / CGS_DENSITY_TO_GEOM, "energy_densityc2": poly_energy / CGS_DENSITY_TO_GEOM})
     poly_eos.to_csv("poly_newtonian.csv", index=False)
 
     densities = np.linspace(.00045, 8 * .00045, 100)

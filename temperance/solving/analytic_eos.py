@@ -25,16 +25,21 @@ Units
 All quantities are in geometric units (G = c = 1) unless noted otherwise.
 The conversion from CGS used by interpolated_eos is
 
-    rho [geom] = rho [g/cm^3] * (0.00045 / 2.8e14)
+    rho [geom] = rho [g/cm^3] * CGS_DENSITY_TO_GEOM   (= 0.00045 / 2.8e14)
 
 so that nuclear saturation density (~2.8e14 g/cm^3) maps to ~0.00045 in
-geometric units.
+geometric units; see temperance.utilities.units.
 """
 
 import numpy as np
 import scipy
 import scipy.integrate
 import scipy.interpolate
+
+try:
+    from ..utilities.units import CGS_DENSITY_TO_GEOM
+except ImportError:  # run as a script from inside the package
+    from utilities.units import CGS_DENSITY_TO_GEOM
 
 # ---------------------------------------------------------------------------
 # JAX / NumPy backend selection
@@ -269,12 +274,13 @@ class interpolated_eos:
           - ``energy_densityc2``  energy density / c^2      (same units)
     conversion_factor : float
         Multiplicative factor converting cgs columns to geometric units.
-        Default converts g/cm^3 at nuclear saturation (~2.8e14) to ~0.00045.
+        Default (CGS_DENSITY_TO_GEOM) converts g/cm^3 at nuclear saturation
+        (~2.8e14) to ~0.00045.
     method : str
         Interpolation scheme passed to the backend (``"cubic"`` by default).
     """
 
-    def __init__(self, eos, conversion_factor=1.0 / 2.8e14 * 0.00045, method="cubic"):
+    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="cubic"):
         self.eos = eos
         logenthalpy = xp.array(
             scipy.integrate.cumulative_trapezoid(

@@ -223,3 +223,47 @@ def test_lindblom_solver_quiet_by_default(capsys):
     assert capsys.readouterr().out == ""
     lindblom_solver(lnhc, eos, verbose=True)
     assert "Central log-enthalpy" in capsys.readouterr().out
+
+
+def test_unit_constants():
+    from temperance.utilities import units
+    assert units.KM_PER_MSUN == pytest.approx(1.4766, rel=1e-4)
+    assert units.CGS_DENSITY_TO_GEOM * units.RHO_SAT_CGS == pytest.approx(units.RHO_SAT_GEOM)
+    # the time unit is the light-travel time across one length unit
+    assert units.MSUN_TO_S == pytest.approx(4.9255e-6, rel=1e-4)
+    # omega = 1/Msun is f = 1/(2 pi Msun_in_s)
+    assert units.OMEGA_TO_HZ == pytest.approx(1 / (2 * np.pi * units.MSUN_TO_S))
+
+
+def test_tov_family_uses_unit_constants():
+    from temperance.utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM
+    eos = polytropic_eos(K=123.6, Gamma=2.0)
+    rho_c = 3 * 0.00045
+    family = get_tov_family(eos, [rho_c])
+    lnhs, sols = solve_tov(eos, rho_c)
+    assert family["R"].iloc[0] == pytest.approx(np.sqrt(sols[-1, 0]) * KM_PER_MSUN)
+    assert family["central_baryon_density"].iloc[0] == pytest.approx(rho_c / CGS_DENSITY_TO_GEOM, rel=1e-6)
+
+
+def test_unit_constants_do_not_import_astropy():
+    """The geometric constants load without astropy (the module itself, not the package)."""
+    import subprocess, sys
+    from pathlib import Path
+    import temperance.utilities.units as units
+    code = ("import importlib.util, sys; "
+            f"spec = importlib.util.spec_from_file_location('units', {str(Path(units.__file__))!r}); "
+            "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "print(module.KM_PER_MSUN, 'astropy' in sys.modules)")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.split()[-1] == "False"
+
+
+def test_nuclear_unit_helpers():
+    try:
+        import astropy.units  # noqa: F401
+    except Exception as error:  # missing, or too old for the installed numpy
+        pytest.skip(f"astropy unusable here: {error}")
+    from temperance.utilities import units
+    assert units.baryon_mass_in_g == pytest.approx(1.6749e-24, rel=1e-3)
+    assert units.baryon_mass_in_mev == pytest.approx(939.565, rel=1e-5)
+    assert units.nuclear_density_to_cgs(units.cgs_density_to_nuclear(2.8e14)) == pytest.approx(2.8e14)

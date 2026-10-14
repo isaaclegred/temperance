@@ -12,6 +12,7 @@ import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
 from  temperance.sampling.eos_prior import EoSPriorSet
+from temperance.utilities.units import KM_PER_MSUN, RHO_SAT_CGS
 
 
 
@@ -28,7 +29,7 @@ from scipy.integrate import solve_ivp
 
 
 c_cgs=3e10
-rhonuc=2.8e14
+rhonuc=RHO_SAT_CGS
 
 
 def get_defaults(matplotlib, fontsize=18):
@@ -249,7 +250,7 @@ def complete_p_rho_plot(divide_by_rho_nuc=False, ax=None, zoom=False, legend_loc
 
 
 
-Msol_in_km = 1.477
+Msol_in_km = KM_PER_MSUN
  
 def plot_generic_mr_envelope(post_path, prior_path,
                              post_color="magenta", prior_color="red",
