@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from temperance.solving.analytic_eos import css_eos, interpolated_eos, polytropic_eos
+from temperance.solving.analytic_eos import (css_eos, energy_density_polytrope, interpolated_eos,
+                                              piecewise_eos, polytropic_eos)
 from temperance.solving.solve_relativistic import lindblom_solver
 from temperance.utilities.units import CGS_DENSITY_TO_GEOM
 
@@ -83,3 +84,62 @@ def test_interpolated_eos_cubic_is_honoured_and_more_accurate():
     err_linear = np.abs(linear.p_of_rho(mid) / exact.p_of_rho(mid) - 1)
     err_cubic = np.abs(cubic.p_of_rho(mid) / exact.p_of_rho(mid) - 1)
     assert err_cubic.max() < 0.1 * err_linear.max()
+
+
+def all_eos():
+    _, table = polytrope_table(200)
+    return {
+        "polytropic": polytropic_eos(K=123.6, Gamma=2.0),
+        "energy_density_polytrope": energy_density_polytrope(K=50.0, Gamma=2.0, e_max=5e-3),
+        "css": css_eos(1.0 / 3.0, E0),
+        "interpolated": interpolated_eos(table),
+        "piecewise": piecewise_eos([
+            {"type": "polytrope", "Gamma": 2.0, "K": 50.0, "e_max": 1e-3},
+            {"type": "css", "cs2": 0.5, "e_max": 5e-3},
+        ]),
+    }
+
+
+@pytest.mark.parametrize("name", list(all_eos()))
+def test_logenthalpy_of_p_inverts_p_of_logenthalpy(name):
+    eos = all_eos()[name]
+    lnh = np.linspace(0.05, 0.3, 6)
+    p = eos.p_of_logenthalpy(lnh)
+    np.testing.assert_allclose(eos.logenthalpy_of_p(p), lnh, rtol=1e-3)
+
+
+def test_interpolated_eos_table_limits():
+    _, table = polytrope_table()
+    eos = interpolated_eos(table)
+    assert eos.p_max == pytest.approx(table["pressurec2"].iloc[-1] * CGS_DENSITY_TO_GEOM)
+    assert eos.rho_max == pytest.approx(table["baryon_density"].iloc[-1] * CGS_DENSITY_TO_GEOM)
+    assert eos.e_max == pytest.approx(table["energy_densityc2"].iloc[-1] * CGS_DENSITY_TO_GEOM)
+    assert eos.lnh_max == pytest.approx(float(eos.logenthalpy_of_rho(np.array([eos.rho_max]))[0]))
+    assert eos.lnh_max == pytest.approx(float(eos.logenthalpy_of_p(np.array([eos.p_max]))[0]))
+
+
+def test_interpolated_eos_uses_tabulated_cs2():
+    exact, table = polytrope_table(200)
+    rho = np.array(table["baryon_density"]) * CGS_DENSITY_TO_GEOM
+    lnh = exact.logenthalpy_of_rho(rho)
+    table["cs2c2"] = exact.cs2_of_logenthalpy(lnh)
+    tabulated = interpolated_eos(table)
+    gradient = interpolated_eos(table, cs2_column=None)
+    rows = slice(50, 150, 10)
+    # at the table's own nodes (its lnh grid starts at 0 at the lowest pressure)
+    nodes = tabulated.logenthalpy_of_rho(rho[rows])
+    np.testing.assert_allclose(tabulated.cs2_of_logenthalpy(nodes), table["cs2c2"].iloc[rows], rtol=1e-12)
+    # the finite-difference estimate is close to, but not exactly, the tabulated value
+    estimate = gradient.cs2_of_logenthalpy(nodes)
+    assert not np.allclose(estimate, table["cs2c2"].iloc[rows], rtol=1e-6, atol=0)
+    np.testing.assert_allclose(estimate, table["cs2c2"].iloc[rows], rtol=2e-2)
+
+
+def test_tabulated_cs2_reaches_the_tov_solver():
+    """The Love-number ODE sees the tabulated sound speed."""
+    exact, table = polytrope_table(200)
+    lnh = exact.logenthalpy_of_rho(np.array(table["baryon_density"]) * CGS_DENSITY_TO_GEOM)
+    table["cs2c2"] = 0.5 * exact.cs2_of_logenthalpy(lnh)   # deliberately wrong by a factor 2
+    eta_tabulated = lindblom_solver(0.2, interpolated_eos(table))[1][-1, 2]
+    eta_gradient = lindblom_solver(0.2, interpolated_eos(table, cs2_column=None))[1][-1, 2]
+    assert abs(eta_tabulated - eta_gradient) > 1e-3

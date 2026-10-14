@@ -17,6 +17,7 @@ Every EOS class provides the following callables (all accept array arguments):
     e_of_logenthalpy(lnh)     -> total energy density
     cs2_of_logenthalpy(lnh)   -> adiabatic sound speed squared  dp/de|_s
     logenthalpy_of_rho(rho)   -> inverse: log-enthalpy from baryon density
+    logenthalpy_of_p(p)       -> inverse: log-enthalpy from pressure
     p_of_rho(rho)             -> pressure from baryon density
     e_of_rho(rho)             -> energy density from baryon density
 
@@ -133,6 +134,8 @@ class polytropic_eos:
         )
         self.p_of_rho = lambda rho: self.K * rho ** self.Gamma
         self.e_of_rho = lambda rho: rho + self.p_of_rho(rho) / (self.Gamma - 1.0)
+        self.logenthalpy_of_p = lambda p: self.logenthalpy_of_rho(
+            (p / self.K) ** (1.0 / self.Gamma))
 
 class energy_density_polytrope:
     """
@@ -213,6 +216,7 @@ class energy_density_polytrope:
         self.p_of_e   = lambda e: K * e ** Gamma
         self.e_of_p   = lambda p: (p / K) ** (1.0 / Gamma)
         self.lnh_of_e = lambda e: Gamma / (Gamma - 1.0) * xp.log(1.0 + K * e ** (Gamma - 1.0))
+        self.logenthalpy_of_p = lambda p: self.lnh_of_e(self.e_of_p(p))
 class css_eos:
     """
     Constant-speed-of-sound EOS above a transition energy density e0.
@@ -262,6 +266,9 @@ class css_eos:
         self.logenthalpy_of_rho = lambda rho: xp.where(
             rho < e0, 0.0, cs2 * xp.log(xp.maximum(rho, e0) / e0))
         self.p_of_rho = lambda rho: self.p_of_e(self.e_of_rho(rho))
+        # e = e0 + p / cs2, so X = 1 + (1 + cs2) p / (cs2 e0)
+        self.logenthalpy_of_p = lambda p: cs2 / (1.0 + cs2) * xp.log(
+            1.0 + (1.0 + cs2) * p / (cs2 * e0))
 
 
 class interpolated_eos:
@@ -269,8 +276,14 @@ class interpolated_eos:
     Tabulated EOS read from a DataFrame and interpolated with splines.
 
     The log-enthalpy grid is constructed by numerically integrating
-    dp / (e + p) over the tabulated pressure column.  The sound speed is
-    derived as d(lnh) / d(ln rho) via numerical differentiation.
+    dp / (e + p) over the tabulated pressure column, starting from lnh = 0 at
+    the lowest tabulated pressure.  The sound speed is taken from the
+    ``cs2_column`` column when the table has one (e.g. ``cs2c2`` in the
+    Zenodo EOS sets), and otherwise derived as d(lnh) / d(ln rho) by
+    numerical differentiation.
+
+    Attributes ``p_max``, ``e_max``, ``rho_max`` and ``lnh_max`` give the
+    top of the table (geometric units).
 
     Parameters
     ----------
@@ -288,9 +301,13 @@ class interpolated_eos:
         default) or ``"cubic"``.  Before this was honoured every table was
         interpolated linearly whatever was passed, so ``"linear"`` reproduces
         earlier results.
+    cs2_column : str or None
+        Column holding the sound speed squared (dimensionless), used when
+        present.  None always uses the finite-difference estimate.
     """
 
-    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="linear"):
+    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="linear",
+                 cs2_column="cs2c2"):
         self.eos = eos
         logenthalpy = xp.array(
             scipy.integrate.cumulative_trapezoid(
@@ -302,7 +319,15 @@ class interpolated_eos:
         baryon_density = xp.array(eos["baryon_density"]) * conversion_factor
         pressurec2 = xp.array(eos["pressurec2"]) * conversion_factor
         energy_densityc2 = xp.array(eos["energy_densityc2"]) * conversion_factor
-        cs2 = xp.array(np.gradient(logenthalpy, np.log(baryon_density)))
+        if cs2_column is not None and cs2_column in eos:
+            cs2 = xp.array(eos[cs2_column], dtype=float)
+        else:
+            cs2 = xp.array(np.gradient(logenthalpy, np.log(baryon_density)))
+
+        self.p_max = float(pressurec2[-1])
+        self.e_max = float(energy_densityc2[-1])
+        self.rho_max = float(baryon_density[-1])
+        self.lnh_max = float(logenthalpy[-1])
 
         self.cs2_of_logenthalpy = interp1d((logenthalpy,), cs2, method=method)
         self.rho_of_logenthalpy = interp1d((logenthalpy,), baryon_density, method=method)
@@ -311,6 +336,7 @@ class interpolated_eos:
         self.p_of_logenthalpy = interp1d((logenthalpy,), pressurec2, method=method)
         self.e_of_logenthalpy = interp1d((logenthalpy,), energy_densityc2, method=method)
         self.logenthalpy_of_rho = interp1d((baryon_density,), logenthalpy, method=method)
+        self.logenthalpy_of_p = interp1d((pressurec2,), logenthalpy, method=method)
 
 
 class piecewise_eos:
@@ -431,6 +457,7 @@ class piecewise_eos:
         self.logenthalpy_of_rho = scipy.interpolate.interp1d(rho_arr, lnh_arr, **kw)
         self.p_of_rho           = scipy.interpolate.interp1d(rho_arr, p_arr,   **kw)
         self.e_of_rho           = scipy.interpolate.interp1d(rho_arr, e_arr,   **kw)
+        self.logenthalpy_of_p   = scipy.interpolate.interp1d(p_arr, lnh_arr,   **kw)
 
 
 class analytic_composition_dependent_eos:
