@@ -2,6 +2,7 @@ import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
 from temperance.core import kde
+from temperance.utilities.units import KM_PER_MSUN
 
 import temperance.sampling.branched_interpolator as b_interp
 from temperance.core.stats import SamplesColumn
@@ -115,7 +116,7 @@ def generate_mr_samples(
         samples = b_interp.choose_macro_per_m(
             mass_samples,
             eos_table,
-            black_hole_values={"R": lambda m: 1.477 * 2 * m},
+            black_hole_values={"R": lambda m: 2 * m * KM_PER_MSUN},
             only_lambda=False,
         )
         output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 0] = (
