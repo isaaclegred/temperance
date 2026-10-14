@@ -5,7 +5,8 @@ import h5py
 
 from dataclasses import dataclass
 
-from .stability import stable_branches
+from .stability import stable_branches, stable_mask
+from ..utilities.units import KM_PER_MSUN
 
 
 # This is the eos set we use most often
@@ -25,7 +26,24 @@ class Extraction:
     """
     Get a particular EoS common quantity from a prior (i.e. extract per eos)
 
-    If dynamic is not None, we use this column to decide extraction values 
+    strategy "interpolation": read the dependent variables off each EoS at
+    the given ``values`` of ``independent_variable`` (and/or at the per-EoS
+    ``dynamic`` values; if dynamic is not None, we use this column to decide
+    extraction values).
+
+    strategy "extremize": the ``extremum`` ("max" or "min") over each EoS's
+    stable stars (if ``branched`` and ``macro``) that pass ``mask``.  With no
+    independent_variable, each dependent variable's own extremum, in columns
+    "max(M)", ...; with one, the dependent variables at the star where it is
+    extremal, in columns "R(max(M))", ...  The extremum is over the
+    *tabulated* stars, so e.g. max(M) is the heaviest stable star in the
+    table, slightly below the true M_max between samples
+    (solving.sequences.refine_boundary can locate it precisely).
+
+    ``mask`` is a callable table -> boolean array (e.g. ``lambda t: t["M"] >=
+    1.0``).  ``derived`` maps column names to callables table -> array,
+    computed before extraction; "C" (= M / R, R in km) is always available
+    for tables with M and R.
     """
     strategy : str
     macro : bool
@@ -34,12 +52,35 @@ class Extraction:
     dynamic : list[str] = None
     branched : bool = True
     selection_rule :str = "random"
+    extremum : str = "max"
+    mask : object = None
+    derived : dict = None
 _known_extraction_strategies = ["extremize", "interpolation"]
+_known_extrema = ["max", "min"]
 _known_selection_rules = ["random", "min", "max", "nearest_neighbor"]
 
 # Column-name formats for extracted properties, matching universality
 VALUE_COLUMN_TEMPLATE = "%s(%s=%s)"      # y(x=value), for static x values
 REFERENCE_COLUMN_TEMPLATE = "%s(%s@%s)"  # y(x@column), for dynamic x values
+
+
+def extremum_columns(columns, extremum, reference=None):
+    """
+    Names of the columns returned by an "extremize" extraction: "max(M)" for
+    a column's own extremum, or "R(max(M))" for a column at the extremum of
+    ``reference``.
+    """
+    if reference is None:
+        return [f"{extremum}({column})" for column in columns]
+    return [f"{column}({extremum}({reference}))" for column in columns]
+
+
+def _compactness(table):
+    """M / R with M in Msun and R in km."""
+    return np.asarray(table["M"], dtype=float) / (np.asarray(table["R"], dtype=float) / KM_PER_MSUN)
+
+
+DERIVED_COLUMNS = {"C": _compactness}
 
 
 def output_columns(columns, reference, reference_values=(), reference_columns=()):
@@ -267,9 +308,11 @@ class EoSPriorDistribution:
         `output_columns`, the same layout as UniversalityEoSPriorSet.get_property.
         """
         if extraction.strategy == "extremize":
-            # call to process2extrema
-            
-            return eos_indices
+            columns = extremum_columns(dependent_variables, extraction.extremum,
+                                       extraction.independent_variable)
+            data = [self.get_extremum_per_eos(eos_index, dependent_variables, extraction, **kwargs)
+                    for eos_index in eos_indices]
+            return pd.DataFrame(np.array(data).reshape(-1, len(columns)), columns=columns)
         elif extraction.strategy != "interpolation":
             raise ValueError(f"Unknown extraction strategy, {extraction.strategy},"
                              f"try one of {_known_extraction_strategies}")
@@ -383,6 +426,50 @@ class EoSPriorDistribution:
                 chosen[i] = np.max(values, axis=0)
         return chosen.T.flatten()
 
+
+    def get_extremum_per_eos(self, eos_index, dependent_variables, extraction,
+                             default_values=None, mass_column="M", radius_column="R",
+                             central_column=None):
+        """
+        The "extremize" extraction for one EoS (see Extraction).
+
+        Stars count if they are radially stable (turning-point rule, when
+        extraction.branched and extraction.macro; ordered by central_column
+        if given, else table order) and pass extraction.mask.  Returns a 1D
+        array, one value per dependent variable; default_values (NaN by
+        default) if no star counts.
+        """
+        if extraction.extremum not in _known_extrema:
+            raise ValueError(f"extremum={extraction.extremum!r} not understood, try one of {_known_extrema}")
+        if default_values is None:
+            default_values = [np.nan] * len(dependent_variables)
+        table = self.get_macro(eos_index) if extraction.macro else self.get_eos(eos_index)
+        table = pd.DataFrame(np.asarray(table)) if not isinstance(table, pd.DataFrame) else table.copy()
+        derived = {**DERIVED_COLUMNS, **(extraction.derived or {})}
+        needed = list(dependent_variables) + ([extraction.independent_variable]
+                                              if extraction.independent_variable else [])
+        for name in needed:
+            if name not in table and name in derived:
+                table[name] = derived[name](table)
+
+        keep = np.ones(len(table), dtype=bool)
+        if extraction.branched and extraction.macro:
+            radius = (np.asarray(table[radius_column], dtype=float)
+                      if radius_column is not None and radius_column in table else None)
+            keep &= stable_mask(np.asarray(table[mass_column], dtype=float), radius,
+                                central_variable=None if central_column is None else table[central_column])
+        if extraction.mask is not None:
+            keep &= np.asarray(extraction.mask(table), dtype=bool)
+        if not keep.any():
+            return np.asarray(default_values, dtype=float)
+
+        pick = np.nanargmax if extraction.extremum == "max" else np.nanargmin
+        rows = table.loc[keep]
+        if extraction.independent_variable is None:
+            return np.array([np.asarray(rows[name], dtype=float)[pick(np.asarray(rows[name], dtype=float))]
+                             for name in dependent_variables])
+        best = pick(np.asarray(rows[extraction.independent_variable], dtype=float))
+        return np.array([float(np.asarray(rows[name], dtype=float)[best]) for name in dependent_variables])
 
     def get_quantiles(self, eos_indices, xcolumn, ycolumn, x_test, quantiles,
                       weights=None, macro=False, branched=None,
