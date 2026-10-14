@@ -21,16 +21,24 @@ n : int >= 0
     Negative n labels g-modes in some conventions (not used here).
 
 For GR only: w-modes (purely spacetime) are returned when ell >= 2 and the
-solver is run in spacetime-perturbation mode.
+solver is run in spacetime-perturbation mode.  Axial (odd-parity) w-modes
+trapped in the potential well of an ultracompact star are computed by
+RelativisticModes.trapped_axial_modes; strongly damped curvature w-modes and
+polar w-modes are not implemented yet.
+
+Units: frequencies are in the units of the stellar model (geometric, 1/Msun
+for temperance's models); convert with temperance.utilities.units
+(OMEGA_TO_HZ for omega, MSUN_TO_S for damping times).
 """
 
 from __future__ import annotations
 
 import numpy as np
+from scipy.integrate import trapezoid
 import scipy.integrate
 import scipy.interpolate
 import scipy.optimize
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .stellar_models import NewtonianStellarModel, RelativisticStellarModel
@@ -46,15 +54,17 @@ class OscillationMode:
     ell: int
     m: int
     n: int
-    omega: complex                     # angular frequency (rad/s or geometric units)
-    frequency: float                   # Re(omega) / (2 pi), Hz
-    damping_time: Optional[float]      # 1 / Im(omega), s  (None for Newtonian)
+    omega: complex                     # angular frequency (units of the stellar model)
+    frequency: float                   # Re(omega) / (2 pi), same units
+    damping_time: Optional[float]      # 1 / |Im(omega)|, same units (None if undamped)
     xi_r: Optional[np.ndarray] = None  # radial displacement eigenfunction on radial grid
     xi_h: Optional[np.ndarray] = None  # horizontal displacement eigenfunction
     pressure_perturbation: Optional[np.ndarray] = None
     radial_grid: Optional[np.ndarray] = None  # r-coordinates for eigenfunctions
     mode_type: str = "unknown"         # "f", "p", "g", "w", or "radial"
     solver_info: dict = field(default_factory=dict)
+    quality_factor: Optional[float] = None   # Re(omega) / (-2 Im(omega)) for damped modes
+    trapped: Optional[bool] = None           # Re(omega)^2 inside a potential well (axial w-modes)
 
     @property
     def is_radial(self) -> bool:
@@ -69,6 +79,21 @@ class TidalOverlapResult:
     Q_nl: float          # dimensionless overlap integral Q_{n ell}
     kappa_nl: float      # effective tidal coupling constant
     mode: OscillationMode
+
+
+@dataclass
+class PotentialWell:
+    """
+    A well in the axial potential V_l(r): a minimum bounded on the outside
+    by a barrier maximum.  Modes with V_min < Re(omega)^2 < V_max are
+    trapped, leaking out only by tunnelling through the barrier.
+    """
+    exists: bool
+    r_min: float = np.nan       # radius of the well minimum
+    V_min: float = np.nan
+    r_max: float = np.nan       # radius of the bounding barrier maximum
+    V_max: float = np.nan
+    barrier_location: str = ""  # "interior" / "exterior"
 
 
 def _count_nodes(y: np.ndarray) -> int:
@@ -836,23 +861,34 @@ class RelativisticModes:
     def __init__(self, stellar_model: RelativisticStellarModel, *, include_spacetime: bool = True):
         self.model = stellar_model
         self.include_spacetime = include_spacetime
+        self._axial_cache = {}
+        self._trapped_cache = {}
         self._build_interpolators()
 
     def _build_interpolators(self) -> None:
-        """Build cubic interpolators for all background profile quantities."""
+        """
+        Build cubic interpolators for the background profiles.  Models
+        without an EOS (e.g. UniformDensityStellarModel) have no rho, cs2 or
+        Gamma1; those interpolators are then None, which is fine for the
+        axial modes but not for the fluid (radial) modes.
+        """
         m = self.model
         kw = dict(kind="cubic", bounds_error=False, fill_value=0.0)
-        self._rho_i    = scipy.interpolate.interp1d(m.r, m.rho,    **kw)
-        self._p_i      = scipy.interpolate.interp1d(m.r, m.p,      **kw)
-        self._e_i      = scipy.interpolate.interp1d(m.r, m.e,      **kw)
-        self._m_i      = scipy.interpolate.interp1d(m.r, m.m,      **kw)
-        self._cs2_i    = scipy.interpolate.interp1d(m.r, m.cs2,    **kw)
-        self._Gamma1_i = scipy.interpolate.interp1d(m.r, m.Gamma1, **kw)
-        self._nu_i     = scipy.interpolate.interp1d(m.r, m.nu,     **kw)
-        self._lam_i    = scipy.interpolate.interp1d(m.r, m.lam,    **kw)
+        def interpolator(values):
+            return None if values is None else scipy.interpolate.interp1d(m.r, values, **kw)
+        self._rho_i    = interpolator(m.rho)
+        self._p_i      = interpolator(m.p)
+        self._e_i      = interpolator(m.e)
+        self._m_i      = interpolator(m.m)
+        self._cs2_i    = interpolator(m.cs2)
+        self._Gamma1_i = interpolator(m.Gamma1)
+        self._nu_i     = interpolator(m.nu)
+        self._lam_i    = interpolator(m.lam)
         # dν/dr from the TOV equation: (m + 4π r³ p) / (r² (1 − 2m/r))
-        dnu_dr = (m.m + 4.0 * np.pi * m.r**3 * m.p) / (m.r**2 * (1.0 - 2.0 * m.m / m.r))
-        self._dnu_dr_i = scipy.interpolate.interp1d(m.r, dnu_dr,   **kw)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dnu_dr = np.where(m.r > 0, (m.m + 4.0 * np.pi * m.r**3 * m.p)
+                              / (m.r**2 * (1.0 - 2.0 * m.m / m.r)), 0.0)
+        self._dnu_dr_i = interpolator(dnu_dr)
 
     # ------------------------------------------------------------------
     # Radial modes  (ell = 0)
@@ -1072,6 +1108,291 @@ class RelativisticModes:
     # Nonradial modes  (ell >= 2)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Axial (odd-parity) perturbations
+    # ------------------------------------------------------------------
+    #
+    # Chandrasekhar & Ferrari 1991; Kokkotas & Schmidt 1999, Sec. 6:
+    #
+    #     d^2 Z / dr*^2 + [omega^2 - V_l(r)] Z = 0,   dr*/dr = e^{lam - nu},
+    #     V_l = e^{2 nu} [ l(l+1)/r^2 + 4 pi (e - p) - 6 m / r^3 ],
+    #
+    # which is the Regge-Wheeler potential outside the star.  Axial
+    # perturbations of a non-rotating perfect fluid do not couple to the
+    # fluid, so this is a single ODE.  Time dependence e^{-i omega t}: damped
+    # modes have Im(omega) < 0, with Q = Re(omega) / (-2 Im(omega)).
+    #
+    # Boundary conditions: Z ~ r^{l+1} at the centre and purely outgoing
+    # Z ~ e^{+i omega r*} at infinity.  The outgoing solution starts at large r
+    # from the asymptotic series
+    #     Z = e^{i omega r*} sum_k a_k r^{-k},
+    #     2 i omega (k+1) a_{k+1} = [k(k+1) - l(l+1)] a_k - 2M (k^2 - 4) a_{k-1},
+    # is integrated inward to the surface and matched to the interior
+    # solution through the Wronskian of (Z, dZ/dr*).
+    #
+    # LIMITATION: the exterior is integrated along the real r axis.  That is
+    # accurate for weakly damped (trapped, Q >~ 3) modes but not for strongly
+    # damped curvature w-modes (|Im omega| r_inf >> 1), which need a complex-r
+    # rotation or the Benhar-Berti-Ferrari continued fraction.
+    #
+    # Moved here from TrappedNullGeos (trapgeo/axial.py).
+
+    def axial_potential(self, r, ell: int):
+        """V_l(r): the axial potential, interior + Regge-Wheeler exterior."""
+        model, L = self.model, ell * (ell + 1)
+        r = np.asarray(r, dtype=float)
+        m, e, p = model.mass(r), model.energy_density(r), model.pressure(r)
+        return np.exp(2.0 * model.nu_of_r(r)) * (L / r**2 + 4.0 * np.pi * (e - p) - 6.0 * m / r**3)
+
+    def tortoise(self, r):
+        """r*(r), with r*(0) = 0: interior quadrature, Schwarzschild outside."""
+        model = self.model
+        r = np.atleast_1d(np.asarray(r, dtype=float))
+        r_int = np.linspace(0.0, model.R, 4000)
+        rr = np.maximum(r_int, 1e-12)
+        rs_int = scipy.integrate.cumulative_trapezoid(np.exp(model.lam_of_r(rr) - model.nu_of_r(rr)),
+                                                      r_int, initial=0.0)
+        M = model.M
+        exterior = lambda x: x + 2.0 * M * np.log(x / (2.0 * M) - 1.0)
+        return np.where(r <= model.R, np.interp(r, r_int, rs_int),
+                        rs_int[-1] + exterior(np.maximum(r, model.R)) - exterior(model.R))
+
+    def _axial_interior(self, ell):
+        """Cached interpolators of V_l and dr*/dr inside the star."""
+        if ell not in self._axial_cache:
+            model = self.model
+            r = np.asarray(model.r, dtype=float)
+            r = r[r > 0]
+            self._axial_cache[ell] = (
+                scipy.interpolate.PchipInterpolator(r, self.axial_potential(r, ell)),
+                scipy.interpolate.PchipInterpolator(r, np.exp(model.lam_of_r(r) - model.nu_of_r(r))),
+            )
+        return self._axial_cache[ell]
+
+    def find_potential_well(self, ell: int, r_out_factor: float = 8.0, n: int = 6000) -> PotentialWell:
+        """Locate an inner well of V_l bounded by an outer barrier maximum."""
+        model = self.model
+        r = np.linspace(model.R * 1e-3, r_out_factor * max(model.M, model.R / 3), n)
+        r = np.union1d(r, [model.R * (1 - 1e-9), model.R * (1 + 1e-9)])
+        V = self.axial_potential(r, ell)
+        i_maxima = np.nonzero((V[1:-1] >= V[:-2]) & (V[1:-1] > V[2:]))[0] + 1
+        i_minima = np.nonzero((V[1:-1] <= V[:-2]) & (V[1:-1] < V[2:]))[0] + 1
+        if i_minima.size == 0 or i_maxima.size == 0:
+            return PotentialWell(False)
+        i_lo = i_minima[np.argmin(V[i_minima])]
+        outer = i_maxima[i_maxima > i_lo]
+        if outer.size == 0:
+            return PotentialWell(False)
+        i_hi = outer[np.argmax(V[outer])]
+        return PotentialWell(True, r[i_lo], V[i_lo], r[i_hi], V[i_hi],
+                             "interior" if r[i_hi] < model.R else "exterior")
+
+    def _axial_interior_solution(self, omega, ell, r_eval=None, rtol=1e-10, atol=1e-14):
+        model = self.model
+        V_i, g_i = self._axial_interior(ell)
+        r0 = model.R * 1e-4
+        y0 = np.array([r0 ** (ell + 1), (ell + 1) * r0**ell * np.exp(float(model.nu_of_r(r0)))], dtype=complex)
+        w2 = omega**2
+        rhs = lambda r, y: [g_i(r) * y[1], g_i(r) * (V_i(r) - w2) * y[0]]
+        return scipy.integrate.solve_ivp(rhs, (r0, model.R * (1 - 1e-12)), y0, rtol=rtol,
+                                         atol=atol * r0 ** (ell + 1), method="DOP853", t_eval=r_eval)
+
+    def _axial_series(self, omega, ell, r, n_series):
+        M, L = self.model.M, ell * (ell + 1)
+        a = [1.0 + 0j, -L / (2j * omega)]
+        for k in range(1, n_series):
+            a.append(((k * (k + 1) - L) * a[k] - 2 * M * (k * k - 4) * a[k - 1]) / (2j * omega * (k + 1)))
+        a = np.array(a)
+        k = np.arange(len(a))
+        u = np.sum(a * r ** (-k))
+        du = np.sum(-k * a * r ** (-k - 1.0))
+        f = 1.0 - 2.0 * M / r
+        return u, 1j * omega * u + f * du   # (Z, dZ/dr*) up to e^{i omega r*}
+
+    def _axial_exterior_solution(self, omega, ell, r_eval=None, rtol=1e-10,
+                                 r_inf_factor=200.0, n_series=12):
+        M, L = self.model.M, ell * (ell + 1)
+        r_inf = max(r_inf_factor * M, 40.0 * ell / max(abs(omega.real), 1e-3))
+        Z, Y = self._axial_series(omega, ell, r_inf, n_series)
+        w2 = omega**2
+
+        def rhs(r, y):
+            f = 1.0 - 2.0 * M / r
+            V = f * (L / r**2 - 6.0 * M / r**3)
+            return [y[1] / f, (V - w2) * y[0] / f]
+
+        return scipy.integrate.solve_ivp(rhs, (r_inf, self.model.R), np.array([Z, Y]), rtol=rtol,
+                                         atol=1e-30, method="DOP853", t_eval=r_eval)
+
+    def axial_wronskian(self, omega, ell: int):
+        """
+        Normalised Wronskian of the regular interior solution and the purely
+        outgoing exterior solution at r = R; it vanishes at an axial mode.
+        """
+        omega = complex(omega)
+        interior = self._axial_interior_solution(omega, ell)
+        exterior = self._axial_exterior_solution(omega, ell)
+        Zi, Yi = interior.y[0, -1], interior.y[1, -1]
+        Ze, Ye = exterior.y[0, -1], exterior.y[1, -1]
+        norm = (np.sqrt(abs(Zi) ** 2 + abs(Yi / omega) ** 2)
+                * np.sqrt(abs(Ze) ** 2 + abs(Ye / omega) ** 2))
+        return (Zi * Ye - Ze * Yi) / (norm * abs(omega))
+
+    def wkb(self, omega_r: float, ell: int, well: PotentialWell | None = None):
+        """
+        Bohr-Sommerfeld phase (integral of k dr* across the allowed region of
+        the well) and the Gamow estimate of Q for a real frequency omega_r.
+        Returns (phase, Q); (nan, nan) if there is no well or no allowed region.
+        """
+        well = well or self.find_potential_well(ell)
+        if not well.exists:
+            return np.nan, np.nan
+        r = np.linspace(self.model.R * 1e-4, well.r_max * 6, 20000)
+        rs = self.tortoise(r)
+        V = self.axial_potential(r, ell)
+        E = omega_r**2
+        allowed = (V < E) & (r < well.r_max)
+        if not allowed.any():
+            return np.nan, np.nan
+        k = np.sqrt(np.clip(E - V, 0, None))
+        phase = trapezoid(np.where(allowed, k, 0.0), rs)
+        crossing_time = trapezoid(np.where(allowed & (k > 0), 1.0 / np.maximum(k, 1e-30), 0.0), rs)
+        forbidden = (V > E) & (r > well.r_min)
+        theta = trapezoid(np.where(forbidden, np.sqrt(np.clip(V - E, 0, None)), 0.0), rs)
+        return phase, 2.0 * E * crossing_time * np.exp(2.0 * theta)
+
+    def well_phase(self, ell: int, well: PotentialWell | None = None) -> float:
+        """Bohr-Sommerfeld phase of the whole well (at the barrier top), in units of pi."""
+        well = well or self.find_potential_well(ell)
+        if not well.exists:
+            return 0.0
+        phase, _ = self.wkb(np.sqrt(well.V_max) * (1 - 1e-6), ell, well)
+        return phase / np.pi
+
+    def find_axial_mode(self, omega_guess: complex, ell: int, *, well: PotentialWell | None = None,
+                        tol: float = 1e-12, residual_tol: float = 1e-7) -> OscillationMode:
+        """
+        Refine an axial quasinormal mode from a complex frequency guess (a
+        root of axial_wronskian) and characterise it: quality factor,
+        whether it is trapped in the potential well, node count of the
+        interior eigenfunction and the WKB estimate of Q.
+
+        The root counts as converged if the root finder says so or the
+        normalised Wronskian there is below ``residual_tol`` (it is ~1 away
+        from modes).  For very high-Q modes the finder can stall at the
+        Wronskian's numerical noise floor (~1e-10) and report failure even
+        though it has found the root.
+        """
+        def residual(x):
+            W = self.axial_wronskian(x[0] + 1j * x[1], ell)
+            return [W.real, W.imag]
+        omega_guess = complex(omega_guess)
+        solution = scipy.optimize.root(residual, [omega_guess.real, omega_guess.imag], method="hybr",
+                                       options={"xtol": tol})
+        omega = complex(solution.x[0], solution.x[1])
+        residual_value = float(abs(self.axial_wronskian(omega, ell)))
+        well = well or self.find_potential_well(ell)
+        return self._characterise_axial_mode(omega, ell, well,
+                                             bool(solution.success) or residual_value < residual_tol,
+                                             residual_value)
+
+    def _characterise_axial_mode(self, omega, ell, well, converged, residual_value=np.nan):
+        Q = omega.real / (-2.0 * omega.imag) if omega.imag < 0 else np.inf
+        trapped = bool(well.exists and well.V_min < omega.real**2 < well.V_max)
+        r_in = np.linspace(self.model.R * 1e-4, self.model.R * (1 - 1e-12), 800)
+        Z_in = self._axial_interior_solution(omega, ell, r_eval=r_in).y[0]
+        # interior eigenfunction rotated to be mostly real, for counting nodes
+        phase = np.angle(Z_in[np.argmax(abs(Z_in))])
+        nodes = _count_nodes((Z_in * np.exp(-1j * phase)).real)
+        ratio = np.nan
+        if well.exists:
+            # amplitude in the well vs just beyond the barrier, outer solution scaled to match at R
+            r_out = np.linspace(self.model.R, max(well.r_max * 1.5, self.model.R * 1.01), 200)[::-1]
+            Z_out = self._axial_exterior_solution(omega, ell, r_eval=r_out).y[0]
+            scale = Z_in[-1] / Z_out[-1] if Z_out[-1] != 0 else 1.0
+            ratio = float(np.max(abs(Z_in)) / max(abs(Z_out[0] * scale), 1e-300))
+        _, wkb_Q = self.wkb(omega.real, ell, well) if well.exists else (np.nan, np.nan)
+        return OscillationMode(
+            ell=ell, m=0, n=nodes,
+            omega=omega,
+            frequency=omega.real / (2.0 * np.pi),
+            damping_time=1.0 / abs(omega.imag) if omega.imag != 0 else None,
+            radial_grid=r_in,
+            mode_type="w",
+            quality_factor=float(Q),
+            trapped=trapped,
+            solver_info={"parity": "odd", "converged": converged, "wronskian": residual_value,
+                         "n_nodes": nodes,
+                         "well_amplitude_ratio": ratio, "wkb_Q": float(wkb_Q)},
+        )
+
+    def trapped_axial_modes(self, ell: int, *, n_scan: int = 150, max_modes: int = 20,
+                            wkb_prefilter: float | None = 0.25):
+        """
+        Weakly damped axial modes with Re(omega)^2 inside the potential well
+        (between V_min and the barrier top), sorted by Re(omega).
+
+        The well band is scanned along the real axis for minima of
+        |Wronskian|, each refined with find_axial_mode.  ``wkb_prefilter``
+        skips the (expensive) search when the Bohr-Sommerfeld phase of the
+        whole well is below that many pi; the n = 0 quasi-bound state needs
+        about 0.5 pi, the margin guards against WKB error at low ell.
+
+        The result is cached per (ell, settings); the modes returned are
+        copies, so changing them does not affect later calls.
+
+        Returns (well, modes).
+        """
+        key = (ell, n_scan, max_modes, wkb_prefilter)
+        if key not in self._trapped_cache:
+            self._trapped_cache[key] = self._scan_trapped_axial_modes(ell, n_scan, max_modes, wkb_prefilter)
+        well, modes = self._trapped_cache[key]
+        return well, [replace(mode, solver_info=dict(mode.solver_info)) for mode in modes]
+
+    def _scan_trapped_axial_modes(self, ell, n_scan, max_modes, wkb_prefilter):
+        well = self.find_potential_well(ell)
+        if not well.exists:
+            return well, []
+        if wkb_prefilter is not None and self.well_phase(ell, well) < wkb_prefilter:
+            return well, []
+        omega_lo = np.sqrt(max(well.V_min, 0.0)) * 1.0001
+        omega_hi = np.sqrt(well.V_max) * 0.9999
+        grid = np.linspace(omega_lo, omega_hi, n_scan)
+        absW = np.array([abs(self.axial_wronskian(w - 1e-8j, ell)) for w in grid])
+        candidates = np.nonzero((absW[1:-1] < absW[:-2]) & (absW[1:-1] < absW[2:]))[0] + 1
+        modes = []
+        for i in candidates[:max_modes]:
+            mode = self.find_axial_mode(grid[i] - 1j * 1e-4 * grid[i], ell, well=well)
+            omega = mode.omega
+            if (not mode.solver_info["converged"] or omega.imag > 0
+                    or any(abs(omega - other.omega) < 1e-7 * abs(omega) for other in modes)):
+                continue
+            modes.append(mode)
+        modes.sort(key=lambda mode: mode.omega.real)
+        return well, modes
+
+    def minimal_trapping_ell(self, threshold: float = 0.5, ell_max: int = 256):
+        """
+        Smallest ell whose axial well supports an n = 0 quasi-bound state in
+        the Bohr-Sommerfeld sense (well_phase >= threshold * pi), by
+        bisection in ell (the phase grows roughly linearly with ell at large
+        ell; assumed monotonic).  np.inf if none up to ell_max.
+        """
+        ok = lambda ell: self.well_phase(int(ell)) >= threshold
+        if ok(2):
+            return 2
+        if not ok(ell_max):
+            return np.inf
+        lo, hi = 2, ell_max
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            lo, hi = (lo, mid) if ok(mid) else (mid, hi)
+        return hi
+
+    # ------------------------------------------------------------------
+    # Nonradial modes  (ell >= 2)
+    # ------------------------------------------------------------------
+
     def compute_nonradial_mode(
         self,
         ell: int,
@@ -1084,13 +1405,11 @@ class RelativisticModes:
         """
         Compute a nonradial quasi-normal mode with given (ell, m, n) in GR.
 
-        For fluid modes (f, p, g) the Lindblom-Detweiler equations are solved
-        as an eigenvalue problem with outgoing-wave boundary conditions at
-        infinity, yielding complex eigenfrequencies omega = omega_R + i omega_I
-        where |1/omega_I| is the gravitational wave damping time.
-
-        For w-modes (spacetime modes), the fluid is frozen and the
-        Regge-Wheeler/Zerilli equation alone is solved.
+        Implemented: axial (parity="odd") w-modes trapped in the potential
+        well of an ultracompact star, via trapped_axial_modes; n indexes them
+        in order of increasing Re(omega).  Not implemented yet: polar
+        (even-parity) modes, i.e. the fluid f, p, g modes (Lindblom-Detweiler
+        equations) and polar w-modes, and strongly damped curvature w-modes.
 
         Parameters
         ----------
@@ -1110,7 +1429,7 @@ class RelativisticModes:
         Returns
         -------
         OscillationMode
-            omega is complex; damping_time = 1 / Im(omega).
+            omega is complex; damping_time = 1 / |Im(omega)|.
         """
         if ell < 2:
             raise ValueError(
@@ -1121,7 +1440,17 @@ class RelativisticModes:
             raise ValueError(f"|m|={abs(m)} > ell={ell}")
         if parity not in ("even", "odd"):
             raise ValueError(f"parity must be 'even' or 'odd', got '{parity}'")
-        raise NotImplementedError
+        if parity == "odd":
+            if mode_family != "w":
+                raise ValueError("odd-parity (axial) fluid modes are trivial for a non-rotating star; "
+                                 "use mode_family='w'")
+            _, modes = self.trapped_axial_modes(ell)
+            if n >= len(modes):
+                raise ValueError(
+                    f"axial w-mode n={n} not found: this star has {len(modes)} trapped axial "
+                    f"mode(s) at ell={ell}. Strongly damped curvature w-modes are not implemented.")
+            return replace(modes[n], m=m)
+        raise NotImplementedError("polar (even-parity) nonradial modes are not implemented yet")
 
     def compute_nonradial_spectrum(
         self,
@@ -1140,7 +1469,10 @@ class RelativisticModes:
         ]
 
     def compute_w_modes(self, ell: int, n_max: int) -> list[OscillationMode]:
-        """Return w-mode quasi-normal modes (spacetime modes) for given ell."""
-        return self.compute_nonradial_spectrum(
-            ell, n_max, mode_family="w", parity="even"
-        )
+        """
+        The trapped axial (odd-parity) w-modes for given ell, at most
+        n_max + 1 of them in order of increasing Re(omega); fewer if the star
+        has fewer (none unless it has a potential well).
+        """
+        _, modes = self.trapped_axial_modes(ell)
+        return modes[: n_max + 1]
