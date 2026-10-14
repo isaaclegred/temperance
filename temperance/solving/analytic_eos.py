@@ -339,6 +339,39 @@ class interpolated_eos:
         self.logenthalpy_of_p = interp1d((pressurec2,), logenthalpy, method=method)
 
 
+class _PiecewiseInterpolator:
+    """
+    Interpolate a function that is smooth on each of several consecutive
+    x-intervals but may jump (or kink) between them.
+
+    ``pieces`` is a list of (x, y) arrays, each with increasing x, in order of
+    increasing x; consecutive pieces may share an endpoint.  At a shared
+    endpoint the later (higher-x) piece is used.  With a single piece this is
+    exactly scipy.interpolate.interp1d.
+    """
+
+    def __init__(self, pieces, kind="cubic"):
+        self.edges = np.array([x[0] for x, _ in pieces[1:]], dtype=float)
+        self.functions = [
+            scipy.interpolate.interp1d(x, y, kind=kind if len(x) > 3 else "linear",
+                                       bounds_error=False, fill_value="extrapolate")
+            for x, y in pieces
+        ]
+
+    def __call__(self, x):
+        if len(self.functions) == 1:
+            return self.functions[0](x)
+        x = np.asarray(x, dtype=float)
+        flat = np.atleast_1d(x).ravel()
+        piece = np.searchsorted(self.edges, flat, side="right")
+        out = np.empty_like(flat)
+        for k, function in enumerate(self.functions):
+            selected = piece == k
+            if selected.any():
+                out[selected] = function(flat[selected])
+        return out.reshape(x.shape)
+
+
 class piecewise_eos:
     """
     Piecewise EoS assembled from energy_density_polytrope and CSS segments.
@@ -372,6 +405,13 @@ class piecewise_eos:
     n_table : int
         Number of grid points per segment used when building the table.
 
+    Notes
+    -----
+    Each segment is interpolated with its own cubic spline.  The sound speed
+    jumps and the other functions have kinks at segment boundaries, which a
+    single spline over the whole table would smooth over (with errors of
+    several percent next to a boundary).
+
     Examples
     --------
     >>> eos = piecewise_eos([
@@ -390,10 +430,9 @@ class piecewise_eos:
         if first["type"] == "css":
             raise ValueError("The first segment cannot be CSS (lnh diverges at e=0 with p=0).")
 
-        e_pieces   = []
-        p_pieces   = []
-        lnh_pieces = []
-        cs2_pieces = []
+        # One table piece per segment, each including its lower boundary, so
+        # that every segment gets its own spline.
+        pieces = []
 
         e_lo   = 0.0
         p_lo   = 0.0
@@ -401,10 +440,12 @@ class piecewise_eos:
 
         for i, seg in enumerate(segments):
             e_hi    = seg["e_max"]
-            # First segment avoids e=0; subsequent segments skip the shared
-            # lower boundary (already the last point of the previous segment).
-            e_start = e_hi * 1e-8 if e_lo == 0.0 else e_lo
-            e_grid  = np.linspace(e_start, e_hi, n_table + 1)[1:] if i > 0 else np.linspace(e_start, e_hi, n_table)
+            # The first segment avoids e=0; later ones start at (and include)
+            # the previous segment's upper boundary.
+            if i == 0:
+                e_grid = np.linspace(e_hi * 1e-8, e_hi, n_table)
+            else:
+                e_grid = np.linspace(e_lo, e_hi, n_table + 1)
 
             if seg["type"] == "polytrope":
                 Gamma  = seg["Gamma"]
@@ -429,35 +470,30 @@ class piecewise_eos:
                 lnh_grid = lnh_lo + cs2_val / (1.0 + cs2_val) * np.log(
                     (e_grid + p_grid) / (e_lo + p_lo)
                 )
-                cs2_grid = np.full(n_table, cs2_val)
+                cs2_grid = np.full_like(e_grid, cs2_val)
 
             else:
                 raise ValueError(f"Unknown segment type '{seg['type']}'.")
 
-            e_pieces.append(e_grid)
-            p_pieces.append(p_grid)
-            lnh_pieces.append(lnh_grid)
-            cs2_pieces.append(cs2_grid)
+            piece = {"e": e_grid, "p": p_grid, "lnh": lnh_grid, "cs2": cs2_grid}
+            piece["rho"] = (e_grid + p_grid) / np.exp(lnh_grid)
+            pieces.append(piece)
 
             e_lo   = e_hi
             p_lo   = float(p_grid[-1])
             lnh_lo = float(lnh_grid[-1])
 
-        e_arr   = np.concatenate(e_pieces)
-        p_arr   = np.concatenate(p_pieces)
-        lnh_arr = np.concatenate(lnh_pieces)
-        cs2_arr = np.concatenate(cs2_pieces)
-        rho_arr = (e_arr + p_arr) / np.exp(lnh_arr)
+        def by(x, y):
+            return _PiecewiseInterpolator([(piece[x], piece[y]) for piece in pieces])
 
-        kw = dict(kind="cubic", bounds_error=False, fill_value="extrapolate")
-        self.e_of_logenthalpy   = scipy.interpolate.interp1d(lnh_arr, e_arr,   **kw)
-        self.p_of_logenthalpy   = scipy.interpolate.interp1d(lnh_arr, p_arr,   **kw)
-        self.rho_of_logenthalpy = scipy.interpolate.interp1d(lnh_arr, rho_arr, **kw)
-        self.cs2_of_logenthalpy = scipy.interpolate.interp1d(lnh_arr, cs2_arr, **kw)
-        self.logenthalpy_of_rho = scipy.interpolate.interp1d(rho_arr, lnh_arr, **kw)
-        self.p_of_rho           = scipy.interpolate.interp1d(rho_arr, p_arr,   **kw)
-        self.e_of_rho           = scipy.interpolate.interp1d(rho_arr, e_arr,   **kw)
-        self.logenthalpy_of_p   = scipy.interpolate.interp1d(p_arr, lnh_arr,   **kw)
+        self.e_of_logenthalpy   = by("lnh", "e")
+        self.p_of_logenthalpy   = by("lnh", "p")
+        self.rho_of_logenthalpy = by("lnh", "rho")
+        self.cs2_of_logenthalpy = by("lnh", "cs2")
+        self.logenthalpy_of_rho = by("rho", "lnh")
+        self.p_of_rho           = by("rho", "p")
+        self.e_of_rho           = by("rho", "e")
+        self.logenthalpy_of_p   = by("p", "lnh")
 
 
 class analytic_composition_dependent_eos:

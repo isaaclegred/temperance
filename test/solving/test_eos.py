@@ -143,3 +143,31 @@ def test_tabulated_cs2_reaches_the_tov_solver():
     eta_tabulated = lindblom_solver(0.2, interpolated_eos(table))[1][-1, 2]
     eta_gradient = lindblom_solver(0.2, interpolated_eos(table, cs2_column=None))[1][-1, 2]
     assert abs(eta_tabulated - eta_gradient) > 1e-3
+
+
+def test_piecewise_eos_is_accurate_next_to_segment_boundaries():
+    """
+    Each segment has its own spline: e(lnh) on the CSS side of a polytrope ->
+    CSS boundary (where cs2 jumps from ~0.1 to 0.6) matches the closed form.
+    A single spline over the whole table was off by up to 4% here.
+    """
+    eos = piecewise_eos([{"type": "polytrope", "Gamma": 4 / 3, "K": 0.01, "e_max": 1e-4},
+                         {"type": "polytrope", "Gamma": 2.5, "e_max": 5e-4},
+                         {"type": "css", "cs2": 0.6, "e_max": 2e-3}])
+    K1, G1, e1 = 0.01, 4 / 3, 1e-4
+    p1 = K1 * e1**G1
+    lnh1 = G1 / (G1 - 1) * np.log(1 + K1 * e1 ** (G1 - 1))
+    G2, e2, cs2 = 2.5, 5e-4, 0.6
+    K2 = p1 / e1**G2
+    p2 = K2 * e2**G2
+    lnh2 = lnh1 + G2 / (G2 - 1) * np.log((1 + K2 * e2 ** (G2 - 1)) / (1 + K2 * e1 ** (G2 - 1)))
+    lnh = lnh2 + np.linspace(1e-4, 1e-2, 50)
+    # on the CSS segment: e + p = (e2 + p2) exp((1 + cs2) / cs2 (lnh - lnh2))
+    sum_ep = (e2 + p2) * np.exp((1 + cs2) / cs2 * (lnh - lnh2))
+    e_exact = (sum_ep - p2 + cs2 * e2) / (1 + cs2)
+    np.testing.assert_allclose(eos.e_of_logenthalpy(lnh), e_exact, rtol=1e-8)
+    np.testing.assert_allclose(eos.cs2_of_logenthalpy(lnh), cs2, rtol=1e-12)
+    # and on the polytrope side the sound speed is the polytropic one
+    below = lnh2 - 1e-4
+    e_b = eos.e_of_logenthalpy(np.array([below]))[0]
+    assert eos.cs2_of_logenthalpy(np.array([below]))[0] == pytest.approx(G2 * K2 * e_b**G2 / (e_b + K2 * e_b**G2), rel=1e-6)
