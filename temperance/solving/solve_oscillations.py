@@ -34,6 +34,7 @@ for temperance's models); convert with temperance.utilities.units
 from __future__ import annotations
 
 import numpy as np
+from scipy.integrate import trapezoid
 import scipy.integrate
 import scipy.interpolate
 import scipy.optimize
@@ -1254,10 +1255,10 @@ class RelativisticModes:
         if not allowed.any():
             return np.nan, np.nan
         k = np.sqrt(np.clip(E - V, 0, None))
-        phase = np.trapezoid(np.where(allowed, k, 0.0), rs)
-        crossing_time = np.trapezoid(np.where(allowed & (k > 0), 1.0 / np.maximum(k, 1e-30), 0.0), rs)
+        phase = trapezoid(np.where(allowed, k, 0.0), rs)
+        crossing_time = trapezoid(np.where(allowed & (k > 0), 1.0 / np.maximum(k, 1e-30), 0.0), rs)
         forbidden = (V > E) & (r > well.r_min)
-        theta = np.trapezoid(np.where(forbidden, np.sqrt(np.clip(V - E, 0, None)), 0.0), rs)
+        theta = trapezoid(np.where(forbidden, np.sqrt(np.clip(V - E, 0, None)), 0.0), rs)
         return phase, 2.0 * E * crossing_time * np.exp(2.0 * theta)
 
     def well_phase(self, ell: int, well: PotentialWell | None = None) -> float:

@@ -19,6 +19,7 @@ Moved from TrappedNullGeos (trapgeo/population.py).
 from __future__ import annotations
 
 import numpy as np
+from scipy.integrate import trapezoid
 import scipy.special
 
 
@@ -250,5 +251,5 @@ def population_fraction(M_stable, indicator, population, branch=None, branch_rul
         first = np.argmax(covered, axis=0)
         Q = covered.any(axis=0) & qualifies[first, np.arange(n_grid)]
     p = population.pdf(grid, m_max=M_max)
-    norm = np.trapezoid(p, grid)
-    return float(np.trapezoid(p * Q, grid) / norm) if norm > 0 else np.nan
+    norm = trapezoid(p, grid)
+    return float(trapezoid(p * Q, grid) / norm) if norm > 0 else np.nan
