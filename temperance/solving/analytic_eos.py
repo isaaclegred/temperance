@@ -68,7 +68,8 @@ try:
 except ImportError:
     xp = np
     from scipy.interpolate import interp1d as spinterp1d
-    interp1d = lambda x, y, method, **kwargs: spinterp1d(x[0], y, **kwargs)
+    # match the JAX RegularGridInterpolator call signature: points as a 1-tuple
+    interp1d = lambda x, y, method, **kwargs: spinterp1d(x[0], y, kind=method, **kwargs)
     ode_solver = scipy.integrate.odeint
 
     def print_val(statement, **kwargs):
@@ -217,7 +218,19 @@ class css_eos:
     Constant-speed-of-sound EOS above a transition energy density e0.
 
     Below e0 the matter is pressure-free (p = 0, modelling a low-density
-    crust); above e0 the pressure is linear in energy density with slope cs2.
+    crust, with rho = e); above e0 the pressure is linear in energy density
+    with slope cs2.
+
+    With X = ((1 + cs2) e - cs2 e0) / e0, the first law d ln rho = de / (e + p)
+    and continuity at e0 give the closed forms
+
+        p     = cs2 (e - e0)
+        rho   = e0 X^(1 / (1 + cs2))
+        lnh   = cs2 / (1 + cs2) ln X          (h = (e + p) / rho)
+        e     = [e0 exp((1 + cs2) lnh / cs2) + cs2 e0] / (1 + cs2)
+        rho   = e0 exp(lnh / cs2)
+
+    so lnh = 0 and rho = e at e = e0.
 
     Parameters
     ----------
@@ -230,31 +243,25 @@ class css_eos:
     def __init__(self, cs2, e0):
         self.cs2 = cs2
         self.e0 = e0
-        prefactor = e0 * (e0 / (1 + cs2)) ** (-1.0 / (1 + cs2))
 
-        self.p_of_e = lambda e: xp.where(e < self.e0, 0, self.cs2 * (e - self.e0))
+        def X_of_e(e):
+            return ((1.0 + cs2) * e - cs2 * e0) / e0
+
+        self.p_of_e = lambda e: xp.where(e < e0, 0.0, cs2 * (e - e0))
         self.rho_of_e = lambda e: xp.where(
-            e < self.e0,
-            e,
-            (e - self.e0 * self.cs2) ** (1.0 / (1 + self.cs2)) * prefactor,
-        )
+            e < e0, e, e0 * xp.abs(X_of_e(e)) ** (1.0 / (1.0 + cs2)))
         self.enthalpy_of_e = lambda e: (e + self.p_of_e(e)) / self.rho_of_e(e)
         self.e_of_rho = lambda rho: xp.where(
-            rho < self.e0,
-            rho,
-            (rho / prefactor) ** (1 + self.cs2) / (1 + self.cs2) + self.e0 * self.cs2,
-        )
+            rho < e0, rho, e0 * ((rho / e0) ** (1.0 + cs2) + cs2) / (1.0 + cs2))
         self.e_of_logenthalpy = lambda lnh: (
-            e0 * (1 + 2 * self.cs2) * xp.exp((1 + self.cs2 / self.cs2) * lnh) / (1 + self.cs2)
+            e0 * (xp.exp((1.0 + cs2) * lnh / cs2) + cs2) / (1.0 + cs2)
         )
         self.p_of_logenthalpy = lambda lnh: self.p_of_e(self.e_of_logenthalpy(lnh))
-        self.rho_of_logenthalpy = lambda lnh: self.rho_of_e(self.e_of_logenthalpy(lnh))
-        self.cs2_of_logenthalpy = lambda lnh: xp.full_like(lnh, self.cs2)
-        self.logenthalpy_of_rho = lambda rho: xp.log(
-            self.enthalpy_of_e(self.e_of_rho(rho))
-        )
+        self.rho_of_logenthalpy = lambda lnh: e0 * xp.exp(lnh / cs2)
+        self.cs2_of_logenthalpy = lambda lnh: xp.full_like(xp.asarray(lnh, dtype=float), cs2)
+        self.logenthalpy_of_rho = lambda rho: xp.where(
+            rho < e0, 0.0, cs2 * xp.log(xp.maximum(rho, e0) / e0))
         self.p_of_rho = lambda rho: self.p_of_e(self.e_of_rho(rho))
-        self.e_of_rho = self.e_of_rho
 
 
 class interpolated_eos:
@@ -277,10 +284,13 @@ class interpolated_eos:
         Default (CGS_DENSITY_TO_GEOM) converts g/cm^3 at nuclear saturation
         (~2.8e14) to ~0.00045.
     method : str
-        Interpolation scheme passed to the backend (``"cubic"`` by default).
+        Interpolation scheme passed to the backend, e.g. ``"linear"`` (the
+        default) or ``"cubic"``.  Before this was honoured every table was
+        interpolated linearly whatever was passed, so ``"linear"`` reproduces
+        earlier results.
     """
 
-    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="cubic"):
+    def __init__(self, eos, conversion_factor=CGS_DENSITY_TO_GEOM, method="linear"):
         self.eos = eos
         logenthalpy = xp.array(
             scipy.integrate.cumulative_trapezoid(
