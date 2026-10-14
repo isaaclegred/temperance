@@ -119,7 +119,7 @@ def lindblom_tidal_deformability_rhs(eta, u, du, v, e, p, one_over_cs2, ell=2):
 # ---------------------------------------------------------------------------
 
 def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for=500,
-                    verbose=False):
+                    verbose=False, lnh_grid=None):
     """
     Integrate the TOV equations from the centre outward using log-enthalpy.
 
@@ -149,6 +149,11 @@ def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for
         Number of equally-spaced log-enthalpy grid points.  Default 500.
     verbose : bool
         Print the central log-enthalpy and energy density.  Default False.
+    lnh_grid : array-like, optional
+        Log-enthalpies to return the solution at, decreasing from lnhc
+        (instead of points_to_solve_for equally spaced values down to
+        termination_lnh).  The integration itself is adaptive; this only
+        sets where the solution is reported, e.g. densely near the surface.
 
     Returns
     -------
@@ -194,7 +199,13 @@ def lindblom_solver(lnhc, eos, termination_lnh=1e-14, ell=2, points_to_solve_for
 
         return xp.array([du, dv, deta, dv_b])
 
-    lnhs_solved = xp.linspace(-lnhc, -termination_lnh, points_to_solve_for)
+    if lnh_grid is None:
+        lnhs_solved = xp.linspace(-lnhc, -termination_lnh, points_to_solve_for)
+    else:
+        lnh_grid = np.asarray(lnh_grid, dtype=float)
+        if not np.isclose(lnh_grid[0], lnhc) or np.any(np.diff(lnh_grid) >= 0):
+            raise ValueError("lnh_grid must decrease strictly from lnhc")
+        lnhs_solved = -lnh_grid
     solution = ode_solver(rhs, initial_state, lnhs_solved)
     return -lnhs_solved, solution
 
