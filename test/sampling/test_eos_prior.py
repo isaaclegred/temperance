@@ -279,7 +279,7 @@ def twin_dir(tmp_path):
         pd.DataFrame({"rhoc": rhoc, "M": mass, "R": radius,
                       "Lambda": 1e3 * (1.4 / mass)**6}).to_csv(
             subdir / f"macro-draw-{draw:06d}.csv", index=False)
-        branches = find_stable_branches(mass)
+        branches = find_stable_branches(mass, radius)
         pd.DataFrame({"start_baryon_density": [rhoc[b][0] for b in branches],
                       "end_baryon_density": [rhoc[b][-1] for b in branches]}).to_csv(
             subdir / f"macro-draw-{draw:06d}-branches.csv", index=False)
@@ -306,7 +306,7 @@ def test_find_stable_branches_matches_branched_interpolator():
     table = pd.DataFrame({"M": twin_star_mass(rhoc, 2), "R": np.linspace(14, 11, 59),
                           "Lambda": np.ones(59), "I": np.ones(59)})
     expected = [list(branch.index) for branch in branched_interpolator.get_branches(table)]
-    assert [list(np.flatnonzero(b)) for b in find_stable_branches(table["M"])] == expected
+    assert [list(np.flatnonzero(b)) for b in find_stable_branches(table["M"], table["R"])] == expected
 
 
 def test_find_stable_branches_monotonic_and_tiny():

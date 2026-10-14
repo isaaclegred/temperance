@@ -5,6 +5,8 @@ import h5py
 
 from dataclasses import dataclass
 
+from .stability import stable_branches
+
 
 # This is the eos set we use most often
 DEFAULT_EOS_DATA = {"eos_dir":"/home/philippe.landry/nseos/eos/gp/mrgagn",
@@ -300,7 +302,7 @@ class EoSPriorDistribution:
 
     def get_property_per_eos(self, eos_index, dependent_variables, extraction, x_test,
                              selection_rule=None, default_values=None, rng=None,
-                             mass_column="M"):
+                             mass_column="M", radius_column="R"):
         """
         Read `dependent_variables` off one EoS at the values `x_test` of
         `extraction.independent_variable`.
@@ -324,7 +326,9 @@ class EoSPriorDistribution:
         default_values: one value per dependent variable, used where an x
           value is on no branch; defaults to NaN
         rng: numpy Generator for the "random" rule
-        mass_column: the column whose turning points delimit stable branches
+        mass_column, radius_column: the columns used to find the stable
+          branches (turning-point rule, see sampling.stability); without a
+          radius column every run of non-decreasing mass counts as stable
 
         Returns a 1D array of length len(dependent_variables) * len(x_test),
         ordered as output_columns: for each dependent variable, each x.
@@ -345,7 +349,9 @@ class EoSPriorDistribution:
         x = np.asarray(table[extraction.independent_variable], dtype=float)
         y = np.asarray(table[list(dependent_variables)], dtype=float)  # (Nrows, Ny)
         if extraction.branched and extraction.macro:
-            branches = find_stable_branches(np.asarray(table[mass_column], dtype=float))
+            radius = (np.asarray(table[radius_column], dtype=float)
+                      if radius_column is not None and radius_column in table else None)
+            branches = find_stable_branches(np.asarray(table[mass_column], dtype=float), radius)
         else:
             branches = [np.ones(len(x), dtype=bool)]
 
@@ -423,28 +429,15 @@ class EoSPriorDistribution:
             median[i] = quantile(y[keep], [0.5], weights=weights[keep])[0]
         return qs, median
 
-def find_stable_branches(mass):
+def find_stable_branches(mass, radius=None, **kwargs):
     """
     Boolean masks (in table order) for each stable branch of a sequence of
-    stars ordered by central density: maximal runs where the mass does not
-    decrease.  A point is on a stable branch if the mass did not decrease
-    to reach it (the first point follows the first step), matching
-    sampling.branched_interpolator.get_branches.
+    stars ordered by central density.  With ``radius`` this is the
+    turning-point rule, which rejects the high-density spiral; without it
+    every run of non-decreasing mass counts.  See
+    temperance.sampling.stability.stable_branches for the other options.
     """
-    mass = np.asarray(mass, dtype=float)
-    if len(mass) < 2:
-        return [np.ones(len(mass), dtype=bool)]
-    steps = np.diff(mass) >= 0
-    stable = np.concatenate([[steps[0]], steps])
-    # label each run of consecutive stable points
-    starts = np.flatnonzero(stable & ~np.concatenate([[False], stable[:-1]]))
-    stops = np.flatnonzero(stable & ~np.concatenate([stable[1:], [False]]))
-    branches = []
-    for start, stop in zip(starts, stops):
-        branch = np.zeros(len(mass), dtype=bool)
-        branch[start:stop + 1] = True
-        branches.append(branch)
-    return branches
+    return stable_branches(mass, radius=radius, **kwargs)
 
 
 def _interpolate_on_branch(x, y, x_test):
