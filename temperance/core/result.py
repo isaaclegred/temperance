@@ -8,7 +8,8 @@ import warnings
 import copy
 from scipy.special import xlogy
 
-from .weights import neff
+from .weights import (conditional_probability, estimate_stratified, model_average, neff,
+                      weighted_histogram, weighted_probability)
 
 # Utilities
 # to be factored out
@@ -618,6 +619,9 @@ class EoSPosterior:
         Compute the number of effective samples in the posterior using 
         weight_columns_to_use, do not include samples which have a weight of 
         threshold relative to the maxiumum weight in the posterior.
+
+        This is the entropy-based n_eff (core.weights.neff); see
+        compute_neff_kish for the variance-based (Kish) one.
         """
         total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
         nonnegligable = np.where(total_weight / np.sum(total_weight) > threshold)[0]
@@ -635,6 +639,9 @@ class EoSPosterior:
         Compute the number of effective samples in the posterior using 
         weight_columns_to_use, do not include samples which have a weight of 
         threshold relative to the maxiumum weight in the posterior.
+
+        This is Kish's (sum w)^2 / sum w^2, which sets the variance of
+        weighted estimates; see compute_neff for the entropy-based one.
         """
         total_weight = np.array(self.get_total_weight(weight_columns_to_use)["total_weight"])
         exists =  np.logical_not(np.isnan(total_weight))
@@ -643,6 +650,67 @@ class EoSPosterior:
             weight_exists / np.sum(weight_exists) > threshold )[0]
         #print(total_weight[nonnegligable])
         return np.sum(weight_exists[nonnegligable] / normalization_factor)**2 / np.sum((weight_exists[nonnegligable]/normalization_factor)**2)
+
+    # ------------------------------------------------------------------
+    # Probabilities of EoS properties
+    # ------------------------------------------------------------------
+
+    def _per_eos(self, quantity):
+        """An array aligned with self.samples from a column name, array or callable(samples)."""
+        if isinstance(quantity, str):
+            return np.asarray(self.samples[quantity])
+        if callable(quantity):
+            return np.asarray(quantity(self.samples))
+        quantity = np.asarray(quantity)
+        if len(quantity) != self.num_samples and len(quantity) != len(self.samples):
+            raise ValueError("a per-EoS array must have one entry per sample")
+        return quantity
+
+    def probability(self, indicator, weight_columns_to_use=None, cl=0.9):
+        """
+        Posterior probability of a boolean EoS property (core.weights
+        .weighted_probability): P, its delta-method sigma, the Kish n_eff,
+        the number of draws with the property and a ``cl`` upper bound for
+        when there are none.
+
+        indicator : column name, boolean array aligned with samples, or
+            callable(samples) -> boolean array
+        weight_columns_to_use : default, every available weight column
+        """
+        columns = self.weight_columns_available if weight_columns_to_use is None else weight_columns_to_use
+        weights = np.asarray(self.get_total_weight(columns)["total_weight"])
+        return weighted_probability(self._per_eos(indicator).astype(float), weights, cl=cl)
+
+    def conditional_probability(self, a, b, weight_columns_to_use=None, cl=0.9):
+        """P(a | b) for two boolean EoS properties (see probability)."""
+        columns = self.weight_columns_available if weight_columns_to_use is None else weight_columns_to_use
+        weights = np.asarray(self.get_total_weight(columns)["total_weight"])
+        return conditional_probability(self._per_eos(a).astype(bool), self._per_eos(b).astype(bool),
+                                       weights, cl=cl)
+
+    def estimate_stratified(self, stratum, values, weight_columns_to_use=None, n_boot=2000, rng=None,
+                            outside_value=0.0):
+        """
+        Posterior mean of an expensive per-EoS quantity evaluated on a random
+        subsample of a stratum (core.weights.estimate_stratified).
+
+        stratum : column name, boolean array or callable(samples)
+        values : pandas Series indexed by EoS (self.eos_column values), the
+            quantity for the EoSs that were evaluated
+        """
+        columns = self.weight_columns_available if weight_columns_to_use is None else weight_columns_to_use
+        weights = np.asarray(self.get_total_weight(columns)["total_weight"])
+        eos = self.samples[self.eos_column]
+        evaluated = eos.isin(values.index).to_numpy()
+        aligned = eos.map(values).to_numpy(dtype=float)
+        return estimate_stratified(weights, self._per_eos(stratum).astype(bool), evaluated, aligned,
+                                   n_boot=n_boot, rng=rng, outside_value=outside_value)
+
+    def histogram(self, quantity, weight_columns_to_use=None, **kwargs):
+        """Weighted histogram of a per-EoS scalar (kwargs to core.weights.weighted_histogram)."""
+        columns = self.weight_columns_available if weight_columns_to_use is None else weight_columns_to_use
+        weights = np.asarray(self.get_total_weight(columns)["total_weight"])
+        return weighted_histogram(self._per_eos(quantity).astype(float), weights, **kwargs)
 
     def add_weight_column(self, weight_column, indexed_weights):
         """
@@ -703,3 +771,29 @@ class EoSPosterior:
         self.samples[result_name]= output_weights[result_name]
         self.weight_columns_available.append(result_weight_column)
 
+
+def average_over_posteriors(posteriors, quantity, log_evidences=None, weight_columns_to_use=None):
+    """
+    Evidence-weighted average of a quantity over several EoS posteriors
+    (e.g. one per hyperparameter value, as from EoSPriorFamily).
+
+    Parameters
+    ----------
+    posteriors : list of EoSPosterior
+    quantity : list of values (one per posterior), or callable(posterior) -> value
+    log_evidences : list of ln Z, optional; by default from estimate_evidence
+        with each posterior's weight columns (or weight_columns_to_use)
+
+    Returns (average, normalised evidence weights).
+    """
+    posteriors = list(posteriors)
+    values = [quantity(posterior) for posterior in posteriors] if callable(quantity) else list(quantity)
+    if len(values) != len(posteriors):
+        raise ValueError("need one value per posterior")
+    if log_evidences is None:
+        log_evidences = []
+        for posterior in posteriors:
+            columns = (posterior.weight_columns_available if weight_columns_to_use is None
+                       else weight_columns_to_use)
+            log_evidences.append(np.log(posterior.estimate_evidence(columns)[0]))
+    return model_average(values, log_evidences)
