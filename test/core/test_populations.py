@@ -4,6 +4,7 @@ weighing.weigh_by_pulsar.
 """
 
 import numpy as np
+from scipy.integrate import trapezoid
 import pandas as pd
 import pytest
 import scipy.stats
@@ -25,7 +26,7 @@ def test_normalised(name, m_max):
     population = POPULATIONS[name]
     hi = min(4.0 if m_max is None else m_max, population.m_max)
     m = np.linspace(population.m_min, hi, 20001)      # the density jumps at the bounds
-    assert np.trapezoid(population.pdf(m, m_max=m_max), m) == pytest.approx(1.0, rel=1e-6)
+    assert trapezoid(population.pdf(m, m_max=m_max), m) == pytest.approx(1.0, rel=1e-6)
     assert population.cdf(population.m_min, m_max) == pytest.approx(0.0, abs=1e-12)
     assert population.cdf(hi, m_max) == pytest.approx(1.0)
     assert np.all(np.diff(population.cdf(m, m_max)) >= -1e-15)
@@ -130,5 +131,5 @@ def test_pulsar_weights_with_a_gaussian_population():
     column = weigh_EoSs_by_mass_measurement(posterior, population=population, mass_likelihood=likelihood.pdf,
                                             log_output_weight=False)
     m = np.linspace(1.0, 2.1, 200001)
-    expected = np.trapezoid(likelihood.pdf(m) * population.pdf(m, m_max=2.1), m)
+    expected = trapezoid(likelihood.pdf(m) * population.pdf(m, m_max=2.1), m)
     assert posterior.samples[column.name].iloc[0] == pytest.approx(expected, rel=1e-5)
