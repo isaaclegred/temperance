@@ -330,7 +330,8 @@ def get_column_logweight(samples:pd.DataFrame, weight_column:WeightColumn):
         else:
             return -logweights
     data = np.array(samples[weight_column.name])
-    logweights = np.log(data) if not weight_column.is_log else data
+    with np.errstate(divide="ignore"):   # zero weights have logweight -inf
+        logweights = np.log(data) if not weight_column.is_log else data
     logweights = invert_logweight(logweights) if weight_column.is_inverted else logweights
     return logweights
 
@@ -409,6 +410,43 @@ class EoSPosterior:
         samples = pd.read_csv(samples_path)
         return EoSPosterior(samples=samples, eos_column=eos_column,
                             weight_columns=weight_columns, **kwargs)
+
+    @staticmethod
+    def from_h5(h5_path, weights_group="Weights", eos_column="eos", weight_name="weight",
+                key_to_index=int, nonfinite="zero", **kwargs):
+        """
+        An EoSPosterior from per-EoS likelihood weights stored in an HDF5
+        group, one scalar dataset per EoS (e.g. "Weights" in the Zenodo
+        17352004 sets).  The samples are {eos_column: index, weight_name:
+        weight}, with a (non-log) WeightColumn registered for the weight.
+
+        Parameters
+        ----------
+        key_to_index : callable
+            Maps a dataset name to the EoS index.
+        nonfinite : "zero" or "drop"
+            What to do with NaN / infinite weights (warned about either way).
+        kwargs : passed to EoSPosterior.
+        """
+        import h5py
+        if nonfinite not in ("zero", "drop"):
+            raise ValueError("nonfinite must be 'zero' or 'drop'")
+        with h5py.File(str(h5_path), mode="r") as h5_file:
+            group = h5_file[weights_group]
+            keys = sorted(group.keys())
+            weights = np.array([group[key][()] for key in keys], dtype=float).reshape(len(keys))
+        samples = pd.DataFrame({eos_column: [key_to_index(key) for key in keys], weight_name: weights})
+        bad = ~np.isfinite(weights)
+        if bad.any():
+            warnings.warn(f"{int(bad.sum())} non-finite weight(s) in {h5_path} "
+                          f"({'set to 0' if nonfinite == 'zero' else 'dropped'}): "
+                          f"{samples.loc[bad, eos_column].tolist()[:10]}", RuntimeWarning)
+            if nonfinite == "zero":
+                samples.loc[bad, weight_name] = 0.0
+            else:
+                samples = samples.loc[~bad].reset_index(drop=True)
+        return EoSPosterior(samples, eos_column=eos_column,
+                            weight_columns=[WeightColumn(weight_name, is_log=False)], **kwargs)
 
     @staticmethod
     def from_marginalized_likelihood(marginalized_likelihood, **kwargs):

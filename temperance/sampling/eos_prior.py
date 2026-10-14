@@ -5,7 +5,8 @@ import h5py
 
 from dataclasses import dataclass
 
-from .stability import stable_branches
+from .stability import stable_branches, stable_mask
+from ..utilities.units import KM_PER_MSUN
 
 
 # This is the eos set we use most often
@@ -25,7 +26,24 @@ class Extraction:
     """
     Get a particular EoS common quantity from a prior (i.e. extract per eos)
 
-    If dynamic is not None, we use this column to decide extraction values 
+    strategy "interpolation": read the dependent variables off each EoS at
+    the given ``values`` of ``independent_variable`` (and/or at the per-EoS
+    ``dynamic`` values; if dynamic is not None, we use this column to decide
+    extraction values).
+
+    strategy "extremize": the ``extremum`` ("max" or "min") over each EoS's
+    stable stars (if ``branched`` and ``macro``) that pass ``mask``.  With no
+    independent_variable, each dependent variable's own extremum, in columns
+    "max(M)", ...; with one, the dependent variables at the star where it is
+    extremal, in columns "R(max(M))", ...  The extremum is over the
+    *tabulated* stars, so e.g. max(M) is the heaviest stable star in the
+    table, slightly below the true M_max between samples
+    (solving.sequences.refine_boundary can locate it precisely).
+
+    ``mask`` is a callable table -> boolean array (e.g. ``lambda t: t["M"] >=
+    1.0``).  ``derived`` maps column names to callables table -> array,
+    computed before extraction; "C" (= M / R, R in km) is always available
+    for tables with M and R.
     """
     strategy : str
     macro : bool
@@ -34,12 +52,35 @@ class Extraction:
     dynamic : list[str] = None
     branched : bool = True
     selection_rule :str = "random"
+    extremum : str = "max"
+    mask : object = None
+    derived : dict = None
 _known_extraction_strategies = ["extremize", "interpolation"]
+_known_extrema = ["max", "min"]
 _known_selection_rules = ["random", "min", "max", "nearest_neighbor"]
 
 # Column-name formats for extracted properties, matching universality
 VALUE_COLUMN_TEMPLATE = "%s(%s=%s)"      # y(x=value), for static x values
 REFERENCE_COLUMN_TEMPLATE = "%s(%s@%s)"  # y(x@column), for dynamic x values
+
+
+def extremum_columns(columns, extremum, reference=None):
+    """
+    Names of the columns returned by an "extremize" extraction: "max(M)" for
+    a column's own extremum, or "R(max(M))" for a column at the extremum of
+    ``reference``.
+    """
+    if reference is None:
+        return [f"{extremum}({column})" for column in columns]
+    return [f"{column}({extremum}({reference}))" for column in columns]
+
+
+def _compactness(table):
+    """M / R with M in Msun and R in km."""
+    return np.asarray(table["M"], dtype=float) / (np.asarray(table["R"], dtype=float) / KM_PER_MSUN)
+
+
+DERIVED_COLUMNS = {"C": _compactness}
 
 
 def output_columns(columns, reference, reference_values=(), reference_columns=()):
@@ -267,9 +308,11 @@ class EoSPriorDistribution:
         `output_columns`, the same layout as UniversalityEoSPriorSet.get_property.
         """
         if extraction.strategy == "extremize":
-            # call to process2extrema
-            
-            return eos_indices
+            columns = extremum_columns(dependent_variables, extraction.extremum,
+                                       extraction.independent_variable)
+            data = [self.get_extremum_per_eos(eos_index, dependent_variables, extraction, **kwargs)
+                    for eos_index in eos_indices]
+            return pd.DataFrame(np.array(data).reshape(-1, len(columns)), columns=columns)
         elif extraction.strategy != "interpolation":
             raise ValueError(f"Unknown extraction strategy, {extraction.strategy},"
                              f"try one of {_known_extraction_strategies}")
@@ -384,6 +427,50 @@ class EoSPriorDistribution:
         return chosen.T.flatten()
 
 
+    def get_extremum_per_eos(self, eos_index, dependent_variables, extraction,
+                             default_values=None, mass_column="M", radius_column="R",
+                             central_column=None):
+        """
+        The "extremize" extraction for one EoS (see Extraction).
+
+        Stars count if they are radially stable (turning-point rule, when
+        extraction.branched and extraction.macro; ordered by central_column
+        if given, else table order) and pass extraction.mask.  Returns a 1D
+        array, one value per dependent variable; default_values (NaN by
+        default) if no star counts.
+        """
+        if extraction.extremum not in _known_extrema:
+            raise ValueError(f"extremum={extraction.extremum!r} not understood, try one of {_known_extrema}")
+        if default_values is None:
+            default_values = [np.nan] * len(dependent_variables)
+        table = self.get_macro(eos_index) if extraction.macro else self.get_eos(eos_index)
+        table = pd.DataFrame(np.asarray(table)) if not isinstance(table, pd.DataFrame) else table.copy()
+        derived = {**DERIVED_COLUMNS, **(extraction.derived or {})}
+        needed = list(dependent_variables) + ([extraction.independent_variable]
+                                              if extraction.independent_variable else [])
+        for name in needed:
+            if name not in table and name in derived:
+                table[name] = derived[name](table)
+
+        keep = np.ones(len(table), dtype=bool)
+        if extraction.branched and extraction.macro:
+            radius = (np.asarray(table[radius_column], dtype=float)
+                      if radius_column is not None and radius_column in table else None)
+            keep &= stable_mask(np.asarray(table[mass_column], dtype=float), radius,
+                                central_variable=None if central_column is None else table[central_column])
+        if extraction.mask is not None:
+            keep &= np.asarray(extraction.mask(table), dtype=bool)
+        if not keep.any():
+            return np.asarray(default_values, dtype=float)
+
+        pick = np.nanargmax if extraction.extremum == "max" else np.nanargmin
+        rows = table.loc[keep]
+        if extraction.independent_variable is None:
+            return np.array([np.asarray(rows[name], dtype=float)[pick(np.asarray(rows[name], dtype=float))]
+                             for name in dependent_variables])
+        best = pick(np.asarray(rows[extraction.independent_variable], dtype=float))
+        return np.array([float(np.asarray(rows[name], dtype=float)[best]) for name in dependent_variables])
+
     def get_quantiles(self, eos_indices, xcolumn, ycolumn, x_test, quantiles,
                       weights=None, macro=False, branched=None,
                       selection_rule="random", default_value=None, rng=None,
@@ -482,18 +569,168 @@ NativeEoSPriorSet = EoSPriorSet
 
 
 class EoSPriorH5(EoSPriorDistribution):
-    def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns", index_to_key=lambda x : str(x)):
+    """
+    EoS draws stored in an HDF5 file, one dataset per draw in an EoS group
+    and a macro (stellar properties) group, e.g. the Zenodo 17352004 sets::
+
+        EoSPriorH5(path, "EoS", "Macro", index_to_key=lambda i: f"{i:05d}")
+
+    get_eos / get_macro return DataFrames.  The file is opened read-only;
+    use the object as a context manager, or call close(), to release it.
+
+    Parameters
+    ----------
+    h5_path : path
+    eos_subgroup_path, macro_subgroup_path : str
+        Groups holding the EoS and macro tables.
+    index_to_key : callable
+        Maps an EoS index to its dataset name.
+    key_to_index : callable
+        The inverse, used by indices(); default int.
+    """
+
+    def __init__(self, h5_path, eos_subgroup_path="eos", macro_subgroup_path="ns",
+                 index_to_key=lambda x : str(x), key_to_index=int):
         self.h5_path = str(h5_path)
-        self.h5_file = h5py.File(self.h5_path, mode="r")
-        self.eos_subgroup = self.h5_file[eos_subgroup_path]
-        self.macro_subgroup = self.h5_file[macro_subgroup_path]
+        self.eos_subgroup_path = eos_subgroup_path
+        self.macro_subgroup_path = macro_subgroup_path
         self.index_to_key = index_to_key
+        self.key_to_index = key_to_index
+        self.h5_file = None
+        self.reopen()
+
+    def reopen(self):
+        """(Re)open the file, e.g. in a worker process after a fork."""
+        if self.h5_file:
+            self.h5_file.close()
+        self.h5_file = h5py.File(self.h5_path, mode="r")
+        self.eos_subgroup = self.h5_file[self.eos_subgroup_path]
+        self.macro_subgroup = self.h5_file[self.macro_subgroup_path]
+
+    @staticmethod
+    def _as_frame(dataset):
+        return pd.DataFrame(dataset[()])
+
     def get_eos(self, eos_index):
-        return self.eos_subgroup[self.index_to_key(eos_index)]
+        """The EoS table of draw eos_index, as a DataFrame."""
+        return self._as_frame(self.eos_subgroup[self.index_to_key(eos_index)])
+
     def get_macro(self, eos_index):
-        return self.macro_subgroup[self.index_to_key(eos_index)]
+        """The macro table of draw eos_index, as a DataFrame."""
+        return self._as_frame(self.macro_subgroup[self.index_to_key(eos_index)])
+
+    def keys(self):
+        """Dataset names of the draws, sorted."""
+        return sorted(self.eos_subgroup.keys())
+
+    def indices(self):
+        """EoS indices of the draws, in the order of keys()."""
+        return [self.key_to_index(key) for key in self.keys()]
+
+    def __len__(self):
+        return len(self.eos_subgroup)
+
+    def close(self):
+        self.h5_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+
     def __getitem__(self, name):
         match name:
             case "ns" : return self.macro_subgroup
             case "eos" : return self.eos_subgroup
-    
+
+
+class EoSPriorFamily:
+    """
+    A family of EoS priors indexed by a hyperparameter, e.g. the Zenodo
+    17352004 sets, one file per transition pressure p_t::
+
+        family = EoSPriorFamily.from_glob("data/*_ns_data.h5", r"maxpc2-([0-9.e+]+)_",
+                                          hyperparameter="p_t", eos_subgroup_path="EoS",
+                                          macro_subgroup_path="Macro",
+                                          index_to_key=lambda i: f"{i:05d}")
+        for p_t, prior in family: ...
+
+    Parameters
+    ----------
+    members : dict hyperparameter value -> EoSPriorDistribution
+    hyperparameter : str
+        Name of the hyperparameter (for labels and tables).
+    paths : dict, optional
+        value -> file path, used by posteriors() to read weights.
+    """
+
+    def __init__(self, members, hyperparameter="hyperparameter", paths=None):
+        self.members = dict(sorted(members.items()))
+        self.hyperparameter = hyperparameter
+        self.paths = dict(paths or {})
+
+    @classmethod
+    def from_glob(cls, pattern, value_regex, hyperparameter="hyperparameter", value_type=float,
+                  **prior_kwargs):
+        """
+        One EoSPriorH5 per file matching ``pattern``; the hyperparameter value
+        is group 1 of ``value_regex`` searched in the file name.  Files the
+        regex does not match are skipped.  prior_kwargs go to EoSPriorH5.
+        """
+        import glob
+        import re
+        members, paths = {}, {}
+        for path in sorted(glob.glob(str(pattern))):
+            match = re.search(value_regex, os.path.basename(path))
+            if match:
+                value = value_type(match.group(1))
+                members[value] = EoSPriorH5(path, **prior_kwargs)
+                paths[value] = path
+        return cls(members, hyperparameter=hyperparameter, paths=paths)
+
+    def values(self):
+        return list(self.members)
+
+    def __iter__(self):
+        return iter(self.members.items())
+
+    def __getitem__(self, value):
+        return self.members[value]
+
+    def __len__(self):
+        return len(self.members)
+
+    def posteriors(self, **from_h5_kwargs):
+        """
+        {value: EoSPosterior} with the weights of each member's file (see
+        EoSPosterior.from_h5; kwargs are passed to it).
+        """
+        from temperance.core.result import EoSPosterior
+        if set(self.paths) != set(self.members):
+            raise ValueError("posteriors() needs a file path for every member")
+        return {value: EoSPosterior.from_h5(self.paths[value], **from_h5_kwargs) for value in self.members}
+
+    def log_evidences(self, posteriors=None, weight_columns=None):
+        """
+        {value: ln Z}, Z = EoSPosterior.estimate_evidence: the mean
+        likelihood weight over each member's (equally weighted) prior draws.
+        """
+        posteriors = posteriors or self.posteriors()
+        out = {}
+        for value, posterior in posteriors.items():
+            columns = weight_columns if weight_columns is not None else posterior.weight_columns_available
+            evidence, _ = posterior.estimate_evidence(columns)
+            out[value] = float(np.log(evidence))
+        return out
+
+    def close(self):
+        for member in self.members.values():
+            if hasattr(member, "close"):
+                member.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
