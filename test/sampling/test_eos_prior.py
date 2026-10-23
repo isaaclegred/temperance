@@ -531,3 +531,37 @@ def test_get_property_verbose(eos_dir, capsys):
 def test_h5_opened_read_only(eos_h5):
     assert eos_h5.h5_file.mode == "r"
     assert isinstance(eos_h5.h5_path, str)
+
+
+def test_monotonic_runs():
+    from temperance.sampling.eos_prior import _monotonic_runs
+    x = np.array([5.0, 0.30, 0.29, 0.40, 0.40, 0.60, 1.0])
+    mask = np.array([0, 1, 1, 1, 1, 1, 1], bool)
+    runs = _monotonic_runs(x, mask)
+    assert [list(np.flatnonzero(run)) for run in runs] == [[1, 2], [2, 3, 4, 5, 6]]   # share the turning row
+    monotonic = np.array([0, 0, 0, 1, 1, 1, 1], bool)
+    assert [list(np.flatnonzero(run)) for run in _monotonic_runs(x, monotonic)] == [[3, 4, 5, 6]]
+
+
+def test_branched_extraction_tolerates_a_wiggle_at_the_branch_end(tmp_path):
+    """
+    As in some Zenodo Macro tables: just past the minimum-mass turning point the
+    sampled mass dips by ~1e-6 while the central-difference dM is still > 0, so
+    the stable branch is not monotonic at its first star.
+    """
+    # (rows 2-5 are Zenodo EoS 4's rows 39-42: the mass minimum, a bump, a dip, then rising)
+    M = np.r_[0.0860, 0.0855, 0.085356, 0.085381, 0.085380, 0.085447, np.linspace(0.1, 2.0, 40)]
+    R = np.r_[250.0, 220.0, 208.97, 195.66, 182.48, 170.81, np.linspace(30.0, 11.0, 40)]
+    from temperance.sampling.stability import stable_mask
+    stable = stable_mask(M, R)
+    assert stable[3] and stable[4] and M[4] < M[3]             # the wiggle is inside the branch
+    subdir = tmp_path / "DRAWmod1000-000000"
+    subdir.mkdir()
+    pd.DataFrame({"rhoc": np.geomspace(1e13, 3e15, len(M)), "M": M, "R": R}).to_csv(
+        subdir / "macro-draw-000000.csv", index=False)
+    prior = EoSPriorSet(eos_dir=str(tmp_path), eos_column="eos", eos_per_dir=1000, macro_dir=str(tmp_path))
+    out = prior.get_property([0], ["R"], Extraction("interpolation", True, "M", [1.4]))
+    assert out["R(M=1.4)"].iloc[0] == pytest.approx(np.interp(1.4, M[6:], R[6:]))
+    # an unbranched extraction over a non-monotonic curve is still refused
+    with pytest.raises(RuntimeError, match="monotonic"):
+        prior.get_property([0], ["R"], Extraction("interpolation", True, "M", [0.0853805], branched=False))

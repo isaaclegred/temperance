@@ -405,6 +405,12 @@ class EoSPriorDistribution:
             nearest = rows[np.argmin(np.abs(x[rows][None, :] - np.asarray(x_test)[:, None]), axis=1)]
             return y[nearest].T.flatten()
 
+        if extraction.branched and extraction.macro:
+            # A stable branch is single-valued up to numerical wiggles at its
+            # ends (e.g. a point just past a sampled turning point whose
+            # central-difference dM is still > 0); split it where x turns.
+            branches = [run for branch in branches for run in _monotonic_runs(x, branch)]
+
         # candidates[i] collects one (Ny,) value per branch covering x_test[i]
         candidates = [[] for _ in x_test]
         for branch in branches:
@@ -525,6 +531,32 @@ def find_stable_branches(mass, radius=None, **kwargs):
     temperance.sampling.stability.stable_branches for the other options.
     """
     return stable_branches(mass, radius=radius, **kwargs)
+
+
+def _monotonic_runs(x, mask):
+    """
+    Split the rows selected by ``mask`` (a contiguous run, as a boolean
+    mask) into maximal runs on which x is monotonic; consecutive runs share
+    the row where x turns.  Returns a list of boolean masks.
+    """
+    rows = np.flatnonzero(mask)
+    if len(rows) < 3:
+        return [mask]
+    direction = np.sign(np.diff(x[rows]))
+    # carry the last nonzero direction through flat steps
+    for k in range(1, len(direction)):
+        if direction[k] == 0:
+            direction[k] = direction[k - 1]
+    turns = np.flatnonzero(direction[1:] * direction[:-1] < 0) + 1
+    if len(turns) == 0:
+        return [mask]
+    edges = np.concatenate([[0], turns, [len(rows) - 1]])
+    runs = []
+    for start, stop in zip(edges[:-1], edges[1:]):
+        run = np.zeros(len(mask), dtype=bool)
+        run[rows[start:stop + 1]] = True
+        runs.append(run)
+    return runs
 
 
 def _interpolate_on_branch(x, y, x_test):
