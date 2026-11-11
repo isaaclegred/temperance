@@ -17,3 +17,5 @@
 
 # Build
 build
+# the dataset tables are source, not results
+!temperance/datasets/*.csv
