@@ -15,7 +15,7 @@ pip install -e .            # from a clone of this repository
 pip install -e ".[test]"    # also install pytest
 ```
 
-Optional extras: `[jax]` (JAX backend), `[ml]` (torch and pyro, for
+Optional extras: `[jax]` (JAX backend), `[ml]` (torch, for
 normalising-flow density estimates), `[lal]` (lalsuite).
 [universality](https://github.com/reedessick/universality) is optional: it is
 only used by the legacy `UniversalityEoSPriorSet` and by

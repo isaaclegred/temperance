@@ -7,8 +7,8 @@ from temperance.weighing.single_event_distributions import generate_mr_samples, 
 
 from temperance.core.stats import SamplesColumn
 
-# torch and pyro (via temperance.weighing.flow) are optional, so they are
-# imported inside the functions that need them.
+# torch (via temperance.weighing.flow) is optional, so it is
+# imported inside the functions that need it.
 
 
 import numpy as np
@@ -121,80 +121,134 @@ def get_normalizing_flow_mr_likelihood_estimate(
     nicer_data_samples,
     prior_distribution=None,
     prior_column=result.WeightColumn("Prior"),
+    **flow_kwargs,
 ):
   """
   Get a likelihood estimate for the mass-radius samples using a normalizing flow.
   Arguments:
   nicer_data_samples: The samples whose density should be estimated to construct the likelihood
-  prior_distribution: If the prior can be represented in some other way, it can be passed as an argument
-  here and `nicer_data_samples` will not be used
+  prior_distribution: If the prior can be represented in some other way (an object with a torch
+  log_prob), it can be passed as an argument here and is divided out of a flow fit to the posterior
+  samples; otherwise the samples are reweighted by `prior_column`
   prior_column: The column which should be read from the `nicer_data_samples` column to divide out,
   i.e. assuming the nicer_data_samples are drawn from the posterior on the event.
+  flow_kwargs: passed to flow.generate_improved_flow_density_estimate (e.g. epochs)
 Returns:
-  A function which takes a sample and returns the likelihood of that sample
+  A function which takes an array of [M, R] rows and returns the likelihood of each
   """
   import torch
   from temperance.weighing import flow as tmflow
   safe_exp = tmflow.safe_exp
   if prior_distribution is not None:
     posterior_density_estimate = tmflow.generate_improved_flow_density_estimate(
-      np.array(nicer_data_samples[["M", "R"]]), weights=None
+      np.array(nicer_data_samples[["M", "R"]]), weights=None, **flow_kwargs
     )
-    return lambda sample: safe_exp(posterior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)) - 
+    return lambda sample: safe_exp(posterior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)) -
                                    prior_distribution.log_prob(torch.tensor(sample, dtype=torch.float)))
   else:
-    posterior_density_estimate = tmflow.generate_improved_flow_density_estimate(
-      np.array(nicer_data_samples[["M", "R"]]), weights=None
-    )
-    prior_density_estimate = tmflow.generate_improved_flow_density_estimate(
+    # posterior samples reweighted by 1 / prior are distributed as the
+    # likelihood, so a flow fit to them is the likelihood (up to a constant),
+    # as for the KDE in weigh_mr_samples
+    likelihood_density_estimate = tmflow.generate_improved_flow_density_estimate(
       np.array(nicer_data_samples[["M", "R"]]),
       weights=result.get_total_weight(
         nicer_data_samples,
         weight_columns=[result.WeightColumn.get_inverse(prior_column)],
-      )["total_weight"],
+      )["total_weight"].to_numpy(),
+      **flow_kwargs,
     )
-    return lambda sample: safe_exp(posterior_density_estimate.log_prob(
-      torch.tensor(sample, dtype=torch.float)
-    ) - prior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)))
+    return lambda sample: safe_exp(likelihood_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)))
+
+
+def gw_flow_coordinates(samples):
+  """
+  The coordinates a GW likelihood flow is fit in, and the log Jacobian back
+  to the original ones.
+
+  samples: array of rows (mass_1, mass_2, lambda_1, lambda_2), mass_1 >= mass_2
+  Returns:
+    (phi, log_jacobian): phi has rows (chirp mass, logit q, log lambda_1,
+    log lambda_2), with q = mass_2 / mass_1; log_jacobian is log |d phi / d
+    samples|, so a density in phi times exp(log_jacobian) is a density in the
+    original coordinates.
+
+  The chirp mass is measured far better than either mass, which makes the
+  posterior a thin ridge in (mass_1, mass_2) but not in (chirp mass, q); and
+  logit q and log lambda send the prior boundaries (q <= 1, lambda >= 0),
+  where posteriors often pile up, to infinity, where a flow handles them as
+  smooth tails rather than smearing a sharp edge.
+  """
+  from bilby.gw.conversion import component_masses_to_chirp_mass
+  samples = np.asarray(samples, dtype=float)
+  mass_1, mass_2, lambda_1, lambda_2 = samples.T
+  q = mass_2 / mass_1
+  chirp_mass = component_masses_to_chirp_mass(mass_1, mass_2)
+  phi = np.column_stack([chirp_mass, np.log(q / (1 - q)), np.log(lambda_1), np.log(lambda_2)])
+  # |d(chirp mass, q) / d(mass_1, mass_2)| = chirp mass / mass_1^2; d logit(q) / dq = 1 / (q (1 - q))
+  log_jacobian = (np.log(chirp_mass / mass_1 ** 2) - np.log(q * (1 - q))
+                  - np.log(lambda_1) - np.log(lambda_2))
+  return phi, log_jacobian
 
 
 def get_normalizing_flow_gw_likelihood_estimate(
     gw_data_samples,
     prior_distribution=None,
     prior_column=result.WeightColumn("Prior"),
+    columns=("mass_1", "mass_2", "lambda_1", "lambda_2"),
+    **flow_kwargs,
 ):
   """
-  Get a likelihood estimate for the mass-radius samples using a normalizing flow.
+  Get a likelihood estimate for binary-neutron-star masses and tidal
+  deformabilities using a normalizing flow fit to GW posterior samples.
+
+  The flow is fit in (chirp mass, logit q, log lambda_1, log lambda_2) (see
+  gw_flow_coordinates) and turned back into a function of (mass_1, mass_2,
+  lambda_1, lambda_2) with the Jacobian.
   Arguments:
-  gw_data_samples: The samples whose density should be estimated to construct the likelihood
-  prior_distribution: If the prior can be represented in some other way, it can be passed as an argument
-  here and `gw_data_samples` will not be used
-  prior_column: The column which should be read from the `gw_data_samples` column to divide out,
-  i.e. assuming the gw_data_samples are drawn from the posterior on the event.
+  gw_data_samples: DataFrame of posterior samples of the event
+  prior_distribution: optionally, an object whose log_prob(torch tensor of rows (mass_1, mass_2,
+  lambda_1, lambda_2)) is the log prior density of the samples; it is divided out of a flow fit to the
+  posterior.  Otherwise the samples are reweighted by `prior_column`.
+  prior_column: The column of `gw_data_samples` holding the (log, by default) prior density of
+  each sample in (mass_1, mass_2, lambda_1, lambda_2), to divide out.  Zero for a prior flat in these.
+  columns: the columns of gw_data_samples holding mass_1, mass_2, lambda_1, lambda_2.  Use the
+  source-frame masses (e.g. ("mass_1_source", "mass_2_source", "lambda_1", "lambda_2") for LVK
+  releases), which is what EoS calculations give.
+  flow_kwargs: passed to flow.generate_improved_flow_density_estimate (e.g. epochs)
 Returns:
-  A function which takes a sample and returns the likelihood of that sample
+  A function which takes an array of rows (mass_1, mass_2, lambda_1, lambda_2) and returns the
+  likelihood of each (up to a constant).  The masses of a row are reordered if mass_2 > mass_1.  Points
+  beyond the sampled region in q or lambda (e.g. lambda = 0 for a black hole) are moved to its edge,
+  i.e. the posterior is taken to be flat beyond the samples there, as it is at a prior boundary.
   """
   import torch
   from temperance.weighing import flow as tmflow
-  safe_exp = tmflow.safe_exp
+  data = np.array(gw_data_samples[list(columns)], dtype=float)
+  phi, log_jacobian = gw_flow_coordinates(data)
   if prior_distribution is not None:
-    posterior_density_estimate = tmflow.generate_flow_density_estimate(
-      np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]])
-    )
-    return lambda sample: safe_exp(posterior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)) - prior_distribution.log_prob(
-      torch.tensor(sample, dtype=torch.float)
-    ))
+    weights = None
   else:
-    posterior_density_estimate = tmflow.generate_flow_density_estimate(
-      np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]])
-    )
-    prior_density_estimate = tmflow.generate_flow_density_estimate(
-      np.array(gw_data_samples[["mass_1", "mass_2", "lambda_1", "lambda_2"]]),
-      weights=result.get_total_weight(
-        gw_data_samples,
-        weight_columns=[result.WeightColumn.get_inverse(prior_column)],
-      )["total_weight"],
-    )
-    return lambda sample: safe_exp(posterior_density_estimate.log_prob(
-      torch.tensor(sample, dtype=torch.float)
-    ) - prior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)))
+    # posterior samples reweighted by 1 / prior are distributed as the likelihood
+    weights = result.get_total_weight(
+      gw_data_samples, weight_columns=[result.WeightColumn.get_inverse(prior_column)])["total_weight"].to_numpy()
+  density_estimate = tmflow.generate_improved_flow_density_estimate(phi, weights=weights, **flow_kwargs)
+  # the sampled region in q and lambda: points beyond it are clamped to its edge
+  q_max = np.max(data[:, 1] / data[:, 0])
+  lambda_min = np.min(data[:, 2:], axis=0)
+
+  def likelihood(sample):
+    sample = np.array(sample, dtype=float, ndmin=2)
+    swap = sample[:, 1] > sample[:, 0]
+    sample[swap] = sample[swap][:, [1, 0, 3, 2]]
+    mass_2 = np.minimum(sample[:, 1], q_max * sample[:, 0])
+    lambdas = np.maximum(sample[:, 2:], lambda_min)
+    clamped = np.column_stack([sample[:, 0], mass_2, lambdas])
+    phi, log_jacobian = gw_flow_coordinates(clamped)
+    with torch.no_grad():
+      log_density = density_estimate.log_prob(torch.tensor(phi, dtype=torch.float)).numpy()
+    if prior_distribution is not None:
+      with torch.no_grad():
+        log_density = log_density - prior_distribution.log_prob(torch.tensor(clamped, dtype=torch.float)).numpy()
+    return np.exp(log_density + log_jacobian)
+
+  return likelihood
