@@ -39,7 +39,7 @@ import matplotlib.pyplot as plt
 try:
     from .analytic_eos import (
         xp, ode_solver, print_val,
-        polytropic_eos, css_eos, interpolated_eos,
+        polytropic_eos, css_eos, interpolated_eos, piecewise_eos,
     )
     from ..utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM, RHO_SAT_GEOM
 except ImportError:
@@ -48,11 +48,11 @@ except ImportError:
     sys.path.insert(0, _inner)
     from solving.analytic_eos import (
         xp, ode_solver, print_val,
-        polytropic_eos, css_eos, interpolated_eos,
+        polytropic_eos, css_eos, interpolated_eos, piecewise_eos,
     )
     from utilities.units import KM_PER_MSUN, CGS_DENSITY_TO_GEOM, RHO_SAT_GEOM
 
-_EOS_TYPES = (interpolated_eos, polytropic_eos, css_eos)
+_EOS_TYPES = (interpolated_eos, polytropic_eos, css_eos, piecewise_eos)
 
 
 def _wrap_eos(eos):
