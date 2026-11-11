@@ -2,9 +2,9 @@ import temperance as tmpy
 import temperance.core.result as result
 from temperance.core.result import EoSPosterior
 from temperance.core import kde
-from temperance.utilities.units import KM_PER_MSUN
+# moved to single_event_distributions; still importable from here for existing callers
+from temperance.weighing.single_event_distributions import generate_mr_samples, generate_gw_samples  # noqa: F401
 
-import temperance.sampling.branched_interpolator as b_interp
 from temperance.core.stats import SamplesColumn
 
 # torch and pyro (via temperance.weighing.flow) are optional, so they are
@@ -14,7 +14,6 @@ from temperance.core.stats import SamplesColumn
 import numpy as np
 import pandas as pd
 import bilby
-import copy
 import h5py
 
 
@@ -64,74 +63,6 @@ def weigh_samples_by_likelihood(
 
 
   
-
-
-def generate_mr_samples(
-    eos_posterior,
-    eos_prior_set,
-    mass_prior_class,
-    num_samples_per_eos,
-    mass_prior_kwargs={"m_min": 1.0},
-    external_get_macro=None
-):
-    """
-    A helper function that probably doesn't belong here.  Generate m-r samples
-    for use in evaluating a mass-radius likelihood.
-    Arguments:
-      eos_posterior: An EoSPosterior
-      eos_prior_set: The EoSPriorSet corresponding to the eos_posterior
-      mass_prior_class: A constructor for the mass prior which will be sampled
-      to get the mass prior.  This class must implement a `sample` method
-      num_samples_per_eos: the number of monte carlo samples used to resolve
-      each eos, for most application should be large enough that
-      num_samples_per_eos * (width of mass measurement)/ (maximum mass - 1) >> 1
-      mass_prior_kwargs: additional kwargs to pass to the mass_prior_class
-      constructor
-    Returns:
-      mr_samples: a DataFrame of samples with eos, eos maximum tov mass,  mass, radius.
-      There will generically be many m-r samples for each eos.
-
-    """
-    def get_macro(eos_index):
-        if external_get_macro is not None:
-            return external_get_macro(eos_index)
-        return eos_prior_set.get_macro(int(eos_index))
-          
-    # EoS samples
-    eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column, "Mmax"]]
-    # columns are "eos-mmax(eos)-mass-radius"
-    columns_to_copy = [eos_posterior.eos_column, "Mmax"]
-    output_data = np.empty(
-        (len(eoss_to_use) * num_samples_per_eos, 2 + len(columns_to_copy))
-    )
-
-    
-    for i, eos_index in enumerate(eoss_to_use[eos_posterior.eos_column]):
-        mass_prior_kwargs_local = copy.deepcopy(mass_prior_kwargs)
-        if "m_max" not in mass_prior_kwargs_local.keys():
-           mass_prior_kwargs_local["m_max"] = eoss_to_use["Mmax"].iloc[i]
-        mass_prior = mass_prior_class(**mass_prior_kwargs_local)
-        eos_table = get_macro(int(eos_index))
-        mass_samples = mass_prior.sample(num_samples_per_eos)
-        samples = b_interp.choose_macro_per_m(
-            mass_samples,
-            eos_table,
-            black_hole_values={"R": lambda m: 2 * m * KM_PER_MSUN},
-            only_lambda=False,
-        )
-        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 0] = (
-            eos_index
-        )
-        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 1] = eoss_to_use["Mmax"].iloc[i]
-        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 2] = (
-            samples["m"]
-        )
-        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 3] = (
-            samples["R"]
-        )
-    return pd.DataFrame(
-        data=output_data, columns=[eos_posterior.eos_column, "Mmax", "M", "R"]
-    )
 
 
 def weigh_mr_samples(
@@ -225,67 +156,6 @@ Returns:
     return lambda sample: safe_exp(posterior_density_estimate.log_prob(
       torch.tensor(sample, dtype=torch.float)
     ) - prior_density_estimate.log_prob(torch.tensor(sample, dtype=torch.float)))
-
-
-def generate_gw_samples(
-    eos_posterior,
-    eos_prior_set,
-    mass_prior_class,
-    num_samples_per_eos,
-    mass_prior_kwargs={"m_min": 1.0},
-    external_get_macro=None
-):
-    """
-    A helper function that probably doesn't belong here.  Generate m-lambda samples
-    for use in evaluating a mass-radius likelihood.
-    Arguments:
-      eos_posterior: An EoSPosterior
-      eos_prior_set: The EoSPriorSet corresponding to the eos_posterior
-      mass_prior_class: A constructor for the mass prior which will be sampled
-      num_samples_per_eos: the number of monte carlo samples used to resolve the likelihood
-      mass_prior_kwargs: additional kwargs to pass to the mass_prior_class
-      constructor
-    Returns:
-      mlambda_samples: a DataFrame of samples with eos, mass_1, mass_2, lambda_1, lambda_2.
-      There will generically be many pairs of m-lambda samples for each eos.
-
-    """
-    def get_macro(eos_index):
-        # external function to get the macro table for a given eos index
-        if external_get_macro is not None:
-            return external_get_macro(eos_index)
-        return eos_prior_set.get_macro(int(eos_index))
-          
-    # EoS samples
-    eoss_to_use = eos_posterior.samples[[eos_posterior.eos_column]]
-    output_data = np.empty(
-        (len(eoss_to_use) * num_samples_per_eos, 4 + len(columns_to_copy))
-    )
-
-    
-    for i, eos_index in enumerate(eoss_to_use[eos_posterior.eos_column]):
-        mass_prior_kwargs_local = copy.deepcopy(mass_prior_kwargs)
-        mass_prior = mass_prior_class(**mass_prior_kwargs_local)
-        # Should be able to just plop something else in here
-        eos_table = get_macro(int(eos_index))
-        mass_1_samples = mass_prior.sample(num_samples_per_eos)
-        mass_2_samples = mass_prior.sample(num_samples_per_eos)
-        samples_1 = b_interp.choose_macro_per_m(
-            mass_1_samples,
-            eos_table,
-            black_hole_values={"lambda": lambda m: 0},
-            only_lambda=False,
-        )
-        samples_2 = b_interp.choose_macro_per_m(
-            mass_2_samples,
-            eos_table,
-            black_hole_values={"lambda": lambda m: 0},
-            only_lambda=False,
-        )
-        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 0] = (
-            eos_index
-        )
-        output_data[i * num_samples_per_eos : (i + 1) * num_samples_per_eos, 1] = eoss_to_use["Mmax"].iloc[i] 
 
 
 def get_normalizing_flow_gw_likelihood_estimate(
