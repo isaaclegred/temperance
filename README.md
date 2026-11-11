@@ -28,7 +28,8 @@ only used by the legacy `UniversalityEoSPriorSet` and by
 | `temperance.core` | `EoSPosterior` and `WeightColumn` (`result`); weighted statistics (`weights`); KDEs (`kde`); mass populations (`populations`) |
 | `temperance.sampling` | Sets of EoS draws (`eos_prior`: `EoSPriorSet`, `EoSPriorH5`, `EoSPriorFamily`, `Extraction`); radial stability (`stability`) |
 | `temperance.solving` | EoS models (`analytic_eos`); TOV solver (`solve_relativistic`); stellar models (`stellar_models`); sequences of stars (`sequences`); oscillation modes (`solve_oscillations`) |
-| `temperance.weighing` | Likelihood weights from observations: pulsar masses (`weigh_by_pulsar`), mass–radius and GW data via density estimates (`weigh_by_density_estimate`) |
+| `temperance.weighing` | Likelihood weights from observations: pulsar masses (`weigh_by_pulsar`, with likelihoods from `pulsar_measurements`), mass–radius and GW data via density estimates (`weigh_by_density_estimate`) |
+| `temperance.datasets` | Tables of published pulsar masses, NICER mass–radius results and GW events, with links to their posterior samples (see [its README](temperance/datasets/README.md)) |
 | `temperance.plotting` | Corner plots (`corner`), credible envelopes (`get_quantiles`, `envelope`) |
 | `temperance.utilities` | Unit constants (`units`); parallel evaluation over EoSs (`parallel`) |
 
@@ -153,6 +154,18 @@ truncated_pdf(galactic_dns, [1.3, 1.4], m_max=2.1)
 property (with explicit rules for twin-star branches), and
 `weigh_by_pulsar.weigh_EoSs_by_mass_measurement(..., population=,
 mass_likelihood=)` uses the same population in a pulsar-mass likelihood.
+`weighing.pulsar_measurements` builds that likelihood from a measurement,
+whether a quoted mass or a mass function with a total mass or a mass ratio
+(Alsing et al. 2018):
+
+```python
+from temperance.weighing.pulsar_measurements import PulsarMeasurement
+from temperance.weighing.weigh_by_pulsar import weigh_EoSs_by_mass_measurement
+
+measurement = PulsarMeasurement.from_dataset("J1816+4510", "kaplan2013")   # or PulsarMeasurement(mass=..., ...)
+likelihood = measurement.get_mass_likelihood()
+weigh_EoSs_by_mass_measurement(posterior, population=galactic_dns, mass_likelihood=likelihood)
+```
 
 ### Plots
 

@@ -44,7 +44,7 @@ def weigh_EoSs_by_mass_measurement(eos_posterior, likelihood=None, additional_sa
     """
     m_max = (additional_samples[[eos_posterior.eos_column, m_max_column]]
              if additional_samples is not None else
-             eos_posterior.samples[[eos_posterior.eos_column, m_max_column]])
+             eos_posterior.samples[[eos_posterior.eos_column, m_max_column]]).copy()
     weight_column_name = f"{'logweight' if log_output_weight else 'weight'}_{weight_tag}"
     weight_column = result.WeightColumn(weight_column_name, is_log=log_output_weight)
     if population is None:
@@ -54,7 +54,8 @@ def weigh_EoSs_by_mass_measurement(eos_posterior, likelihood=None, additional_sa
             raise ValueError("a population needs mass_likelihood, the likelihood as a function of mass")
         weights = np.array([_population_weight(population, mass_likelihood, float(m), n_grid)
                             for m in m_max[m_max_column]])
-    m_max[weight_column.name] = np.log(weights) if log_output_weight else weights
+    with np.errstate(divide="ignore"):   # zero weight (e.g. M_max below the measured mass) -> log weight -inf
+        m_max[weight_column.name] = np.log(weights) if log_output_weight else weights
     eos_posterior.add_weight_column(weight_column, m_max[[eos_posterior.eos_column, weight_column.name]])
     return weight_column
 
@@ -66,6 +67,11 @@ def _population_weight(population, mass_likelihood, m_max, n_grid):
     lo, hi = float(population.minimum), min(float(population.maximum), m_max)
     if not hi > lo:
         return 0.0
+    if hasattr(mass_likelihood, "integrate"):
+        # likelihoods from pulsar_measurements place their own nodes, which resolves
+        # measurements far narrower than the grid below (e.g. 1e-5 Msun for J0737-3039A)
+        return float(mass_likelihood.integrate(lambda m: truncated_pdf(population, m, m_max=m_max),
+                                               m_min=lo, m_max=hi))
     # the truncated density is smooth on [minimum, M_max], so Simpson's rule is accurate
     grid = np.linspace(lo, hi, n_grid + 1)
     return float(scipy.integrate.simpson(mass_likelihood(grid) * truncated_pdf(population, grid, m_max=m_max),

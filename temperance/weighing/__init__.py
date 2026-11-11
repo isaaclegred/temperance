@@ -1,1 +1,1 @@
-__all__ = ["weigh_by_density_estimate", "weigh_by_pulsar"]
+__all__ = ["weigh_by_density_estimate", "weigh_by_pulsar", "pulsar_measurements"]
