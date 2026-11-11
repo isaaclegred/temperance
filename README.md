@@ -181,6 +181,11 @@ weigh_EoSs_by_mass_measurement(posterior, population=galactic_dns, mass_likeliho
 More examples are in `Examples/`: stellar profiles (`Profiles/`),
 oscillation modes (`Modes/`), CompOSE tables (`Compose/`) and weighing
 mass–radius samples (`WeighingSamples/`).
+`SyntheticInference/synthetic_inference.py` is an end-to-end inference: heavy
+pulsars, a NICER measurement and GW events drawn from a toy EoS and a
+double-Gaussian mass population cut off at M_TOV, then used to weigh a set of
+EoSs drawn from the same family (the NICER and GW likelihoods are normalizing flows fit to
+posterior samples, so it needs the `[ml]` extra).
 
 ## Units
 
