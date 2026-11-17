@@ -1,0 +1,60 @@
+table,column,type,unit,required,key,description
+*,name,str,,true,true,"Pulsar or event name, e.g. J0740+6620 or GW170817 (pulsar names use an ASCII hyphen-minus)"
+*,analysis,str,,true,true,"Identifier of the analysis, unique for each name: first author and year, with a suffix when one paper gives several analyses"
+*,reference,str,,true,false,Short citation
+*,arxiv,str,,false,false,arXiv identifier
+*,doi,str,,false,false,DOI of the paper (blank before publication)
+*,samples_url,url,,false,false,"Public release of the posterior, as samples or as a PDF on a grid (blank if none)"
+*,samples_file,str,,false,false,"File in the release holding these samples, where known"
+*,notes,str,,false,false,"Caveats, and results that have no column"
+pulsar_masses,component,str,,true,true,"neutron_star for the star the name refers to (a pulsar, or the neutron star of an X-ray binary); companion for its neutron-star companion in a double neutron star"
+pulsar_masses,system,str,,true,false,"Kind of system, as in Fan et al. 2024: NS-NS, NS-WD, NS-MS (main-sequence companion), BW (black widow), RB (redback), HMXB, LMXB or INS (isolated)"
+pulsar_masses,mass,float,Msun,false,false,Neutron-star mass: median or quoted central value (blank when only mass_function with total_mass or mass_ratio is reported)
+pulsar_masses,mass_minus,float,Msun,false,false,mass minus the lower end of the credible interval
+pulsar_masses,mass_plus,float,Msun,false,false,Upper end of the credible interval minus mass
+pulsar_masses,mass_function,float,Msun,false,false,"Binary mass function of the pulsar orbit, (m_c sin i)^3 / (m_p + m_c)^2; its uncertainty is negligible"
+pulsar_masses,total_mass,float,Msun,false,false,Total mass of the binary: median
+pulsar_masses,total_mass_minus,float,Msun,false,false,total_mass minus the lower end of the credible interval
+pulsar_masses,total_mass_plus,float,Msun,false,false,Upper end of the credible interval minus total_mass
+pulsar_masses,mass_ratio,float,,false,false,Pulsar mass over companion mass: median
+pulsar_masses,mass_ratio_minus,float,,false,false,mass_ratio minus the lower end of the credible interval
+pulsar_masses,mass_ratio_plus,float,,false,false,Upper end of the credible interval minus mass_ratio
+pulsar_masses,credible_level,float,,true,false,Probability in each one-dimensional interval
+pulsar_masses,method,str,,false,false,"How the mass was measured, where recorded: shapiro_delay or post_keplerian (radio timing; post_keplerian when several relativistic effects combine), periastron_advance (total mass from the advance of periastron), white_dwarf_spectroscopy (optical spectroscopy of a white-dwarf companion with radio timing), companion_radial_velocity (mass ratio from the companion's radial velocities), companion_light_curve (optical light curve and radial velocities of an irradiated companion), three_body_timing (timing of a pulsar in a triple system), x_ray_binary_dynamics (eclipses and radial velocities of an X-ray binary), burst_spectroscopy (thermonuclear X-ray bursts) or nicer_pulse_profile"
+pulsar_masses,data_url,url,,false,false,"Public release of the data the measurement rests on (e.g. pulse arrival times and timing model, or optical light curves and radial velocities), from which a likelihood can be rebuilt"
+pulsar_masses,compilations,str,,false,false,"Space-separated tags of the compilations that use this row, e.g. fan2024 for Table I of Fan et al. 2024 (arXiv:2309.12644)"
+nicer_mass_radius,mass,float,Msun,true,false,Gravitational mass: median
+nicer_mass_radius,mass_minus,float,Msun,true,false,mass minus the lower end of the credible interval
+nicer_mass_radius,mass_plus,float,Msun,true,false,Upper end of the credible interval minus mass
+nicer_mass_radius,radius,float,km,true,false,Equatorial circumferential radius: median
+nicer_mass_radius,radius_minus,float,km,true,false,radius minus the lower end of the credible interval
+nicer_mass_radius,radius_plus,float,km,true,false,Upper end of the credible interval minus radius
+nicer_mass_radius,credible_level,float,,true,false,Probability in each one-dimensional interval
+nicer_mass_radius,radio_mass_prior,bool,,true,false,"true if the mass prior came from radio timing, so the mass is not independent of pulsar_masses"
+gravitational_waves,waveform,str,,false,false,Waveform model(s) of the analysis
+gravitational_waves,spin_prior,str,,false,false,low_spin or high_spin; the bound on the spin magnitudes is in notes
+gravitational_waves,chirp_mass_source,float,Msun,false,false,Source-frame chirp mass: median
+gravitational_waves,chirp_mass_source_minus,float,Msun,false,false,chirp_mass_source minus the lower end of the credible interval
+gravitational_waves,chirp_mass_source_plus,float,Msun,false,false,Upper end of the credible interval minus chirp_mass_source
+gravitational_waves,mass_1_source,float,Msun,false,false,Source-frame mass of the heavier component: median
+gravitational_waves,mass_1_source_minus,float,Msun,false,false,mass_1_source minus the lower end of the credible interval
+gravitational_waves,mass_1_source_plus,float,Msun,false,false,Upper end of the credible interval minus mass_1_source
+gravitational_waves,mass_1_source_lower,float,Msun,false,false,"Lower end of the credible interval of mass_1_source, when no median is quoted"
+gravitational_waves,mass_1_source_upper,float,Msun,false,false,"Upper end of the credible interval of mass_1_source, when no median is quoted"
+gravitational_waves,mass_2_source,float,Msun,false,false,Source-frame mass of the lighter component: median
+gravitational_waves,mass_2_source_minus,float,Msun,false,false,mass_2_source minus the lower end of the credible interval
+gravitational_waves,mass_2_source_plus,float,Msun,false,false,Upper end of the credible interval minus mass_2_source
+gravitational_waves,mass_2_source_lower,float,Msun,false,false,"Lower end of the credible interval of mass_2_source, when no median is quoted"
+gravitational_waves,mass_2_source_upper,float,Msun,false,false,"Upper end of the credible interval of mass_2_source, when no median is quoted"
+gravitational_waves,lambda_tilde,float,,false,false,Binary tidal deformability: median
+gravitational_waves,lambda_tilde_minus,float,,false,false,lambda_tilde minus the lower end of the credible interval
+gravitational_waves,lambda_tilde_plus,float,,false,false,Upper end of the credible interval minus lambda_tilde
+gravitational_waves,lambda_tilde_lower,float,,false,false,"Lower end of the credible interval of lambda_tilde, when no median is quoted"
+gravitational_waves,lambda_tilde_upper,float,,false,false,"Upper end of the credible interval of lambda_tilde, when no median is quoted"
+gravitational_waves,radius_1,float,km,false,false,Radius of the heavier component: median
+gravitational_waves,radius_1_minus,float,km,false,false,radius_1 minus the lower end of the credible interval
+gravitational_waves,radius_1_plus,float,km,false,false,Upper end of the credible interval minus radius_1
+gravitational_waves,radius_2,float,km,false,false,Radius of the lighter component: median
+gravitational_waves,radius_2_minus,float,km,false,false,radius_2 minus the lower end of the credible interval
+gravitational_waves,radius_2_plus,float,km,false,false,Upper end of the credible interval minus radius_2
+gravitational_waves,credible_level,float,,true,false,Probability in each one-dimensional interval

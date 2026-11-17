@@ -37,7 +37,7 @@ classifiers = [
 
 [project.optional-dependencies]
 jax = ["jax"]
-ml = ["torch", "pyro-ppl"]
+ml = ["torch"]
 lal = ["lalsuite"]
 test = ["pytest"]
 

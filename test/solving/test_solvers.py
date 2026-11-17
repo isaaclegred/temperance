@@ -267,3 +267,14 @@ def test_nuclear_unit_helpers():
     assert units.baryon_mass_in_g == pytest.approx(1.6749e-24, rel=1e-3)
     assert units.baryon_mass_in_mev == pytest.approx(939.565, rel=1e-5)
     assert units.nuclear_density_to_cgs(units.cgs_density_to_nuclear(2.8e14)) == pytest.approx(2.8e14)
+
+
+def test_get_tov_family_accepts_piecewise_eos():
+    # piecewise EoSs were wrapped as tables (and failed) before solve_relativistic knew the type
+    from temperance.solving.analytic_eos import piecewise_eos
+    from temperance.utilities.units import RHO_SAT_GEOM
+    eos = piecewise_eos([{"type": "rest_mass_polytrope", "Gamma": 2.0, "K": 60.0, "rho_max": 2 * RHO_SAT_GEOM},
+                         {"type": "css", "cs2": 0.55, "e_max": 0.05}])
+    family = get_tov_family(eos, np.geomspace(RHO_SAT_GEOM, 4 * RHO_SAT_GEOM, 6))   # below the maximum mass
+    assert np.all(np.isfinite(family[["M", "R", "Lambda"]].to_numpy()))
+    assert np.all(np.diff(family["M"]) > 0) and np.all(np.diff(family["Lambda"]) < 0)
